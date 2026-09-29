@@ -17,6 +17,7 @@ help:
 	@echo "  make downgrade     Roll back one migration"
 	@echo "  make revision      Create empty migration (msg='...')"
 	@echo "  make db            Open PostgreSQL shell"
+	@echo "  make docker-test   Test on docker"
 	@echo "  make up            Start Docker services"
 	@echo "  make down          Stop Docker services"
 	@echo "  make logs          Follow Docker logs"
@@ -32,6 +33,8 @@ dev:
 
 run:
 	$(UVX) uvicorn $(APP).main:create_app --host 0.0.0.0 --port 8000 --factory
+
+test test-watch: export ENV_FILE := .env.test
 
 test:
 	$(UVX) pytest
@@ -109,6 +112,9 @@ db:
 # Run migrations inside the Docker container
 docker-migrate:
 	docker compose exec app alembic upgrade head
+
+docker-test:
+	docker compose run --rm test
 
 docker-migration:
 ifndef msg

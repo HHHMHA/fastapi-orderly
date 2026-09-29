@@ -8,8 +8,13 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.20.0",
+    "argon2-cffi>=25.1.0",
     "fastapi[standard]>=0.141.1",
+    "psycopg>=3.3.6",
     "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0.54",
+    "uuid6>=2025.0.1",
     "uvicorn[standard]>=0.52.4",
 ]
 
@@ -19,7 +24,10 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.22",
     "httpx>=0.28.1",
+    "ipython>=9.17.1",
+    "jedi>=0.20.0",
     "mypy>=2.3.1",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
@@ -37,6 +45,19 @@ lint.ignore = []
 format.quote-style = "double"
 format.indent-style = "space"
 
+[tool.ruff.lint.pep8-naming]
+classmethod-decorators = [
+    # Allow Pydantic's `@validator` decorator to trigger class method treatment.
+    "pydantic.validator",
+    # Allow SQLAlchemy's dynamic decorators, like `@field.expression`, to trigger class method treatment.
+    "declared_attr",
+    "declared_attr.directive",
+    "sqlalchemy.orm.declared_attr",
+    "sqlalchemy.orm.declared_attr.directive",
+    "expression",
+    "comparator",
+]
+
 [tool.mypy]
 strict = true
 
@@ -44,3 +65,8 @@ strict = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=fastapi_orderly --cov-report=term-missing"
+
+[tool.typos.files]
+extend-exclude = [
+    "src/fastapi_orderly/core/db/alembic/versions/**",
+]

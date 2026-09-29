@@ -18,6 +18,10 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev
 # Runtime
 FROM python:3.13-slim-bookworm AS base
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 appuser
 
 COPY --from=builder --chown=appuser:appuser /app /app
@@ -33,7 +37,8 @@ FROM base AS dev
 
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /uvx /bin/
 
-RUN uv sync --locked
+RUN --mount=type=cache,target=/home/appuser/.cache/uv,uid=1000,gid=1000 \
+    uv sync --locked
 
 CMD ["uvicorn", "fastapi_orderly.main:create_app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--factory"]
 

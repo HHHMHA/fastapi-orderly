@@ -1,19 +1,25 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
 from fastapi_orderly.core.config import get_settings
 from fastapi_orderly.core.config.base import Environment
+from fastapi_orderly.core.db.session import Database
 from fastapi_orderly.core.loggers import logger, setup_logging
 from fastapi_orderly.routers import add_routers
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[dict[str, Any]]:
     setup_logging(app)
+    database = Database(get_settings())
     logger.info("Starting app lifespan")
-    yield
+
+    yield {"database": database}
+
+    await database.dispose()
     logger.info("Exiting app lifespan")
 
 

@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: dev
+          load: true
+          tags: fastapi-orderly:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start dependencies
+        run: docker compose up -d postgres_test redis
+
+      - name: Run tests
+        run: docker compose run --rm test
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v

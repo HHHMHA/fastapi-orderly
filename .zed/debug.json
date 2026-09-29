@@ -1,0 +1,34 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+  {
+    "label": "FastAPI: Debug",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "uvicorn",
+    "args": [
+      "fastapi_orderly.main:create_app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000",
+      "--factory",
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "justMyCode": true,
+  },
+  {
+    "label": "Tests: Debug",
+    "adapter": "Debugpy",
+    "request": "launch",
+    "module": "pytest",
+    "args": [],
+    "env": {
+      "ENV_FILE": ".env.test",
+    },
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "justMyCode": true,
+  },
+]
