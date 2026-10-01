@@ -1,41 +1,29 @@
-from functools import lru_cache
-from typing import Annotated, Protocol
+from abc import abstractmethod
+from typing import Protocol, override
 
 from argon2 import PasswordHasher
-from fastapi import Depends
-
-from fastapi_orderly.core.config import Environment, Settings, get_settings
 
 
 class Hasher(Protocol):
+    @abstractmethod
     def hash(self, password: str) -> str: ...
 
+    @abstractmethod
     def verify(self, password: str, hashed: str) -> bool: ...
 
 
-class FakeHasher:
-    def hash(self, password: str) -> str:
-        return password
-
-    def verify(self, password: str, hashed: str) -> bool:
-        return password == hashed
-
-
-class Argon2Hasher:
+class Argon2Hasher(Hasher):
     def __init__(self) -> None:
         self._hasher = PasswordHasher()
 
+    @override
     def hash(self, password: str) -> str:
         return self._hasher.hash(password)
 
+    @override
     def verify(self, password: str, hashed: str) -> bool:
         return self._hasher.verify(hashed, password)
 
 
-@lru_cache(maxsize=1)
-def get_hasher(settings: Annotated[Settings, Depends(get_settings)]) -> Hasher:
-    # No need to test the hashing algo, only that it calls the hasher.
-    if settings.environment == Environment.TEST:
-        return FakeHasher()
-
+def get_hasher() -> Hasher:
     return Argon2Hasher()

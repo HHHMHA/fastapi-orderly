@@ -2,6 +2,7 @@ import asyncio
 import sys
 from collections.abc import AsyncGenerator, Generator
 
+import httpx
 import pytest
 import pytest_asyncio
 from alembic import command
@@ -12,6 +13,9 @@ from sqlalchemy.ext.asyncio.engine import AsyncTransaction
 
 from fastapi_orderly.core.config import Settings, get_settings
 from fastapi_orderly.core.db.session import Database
+from fastapi_orderly.main import create_app
+from fastapi_orderly.modules.auth.hasher import get_hasher
+from tests.utils import FakeHasher
 
 
 def pytest_configure() -> None:
@@ -105,3 +109,18 @@ def fake_request() -> Request:
         }
     )
     return request
+
+
+@pytest_asyncio.fixture
+async def client() -> AsyncGenerator[httpx.AsyncClient]:
+    app = create_app()
+    app.dependency_overrides[get_hasher] = FakeHasher
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
