@@ -71,3 +71,6 @@ addopts = "--cov=fastapi_orderly --cov-report=term-missing"
 extend-exclude = [
     "src/fastapi_orderly/core/db/alembic/versions/**",
 ]
+
+[tool.typos.default.extend-words]
+selectin = "selectin"

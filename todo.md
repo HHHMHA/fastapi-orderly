@@ -1,5 +1,3 @@
-complete user model and roles and tests
-
 refresh token model (hashed) and tests to revoke it
 
 oauth2_scheme → decode_token → get_current_user → get_current_active_user → require_roles("admin")

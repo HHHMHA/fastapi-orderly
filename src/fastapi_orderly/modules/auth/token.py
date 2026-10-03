@@ -35,7 +35,7 @@ class PysetoTokenizer(AuthTokenizer):
         self._key: KeyInterface = Key.new(
             version=4,
             purpose="local",
-            key=settings.secret_key.get_secret_value().encode("utf-8"),
+            key=settings.secret_key.get_secret_value().encode("ascii"),
         )
 
     @override
