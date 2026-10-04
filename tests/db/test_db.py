@@ -25,6 +25,8 @@ async def test_expire_on_commit_off(no_app_db: Database, fake_request: Request) 
 
         db_u: UserAccount | None = await session.get(UserAccount, 1)
         assert db_u is not None
+        assert str(db_u) == f"<Model {db_u.__tablename__} - id = {db_u.id}>"
+        assert repr(db_u) == f"<Model {db_u.__tablename__} - id = {db_u.id}>"
         assert db_u.username == u.username
         assert db_u.email == u.email
         assert db_u.password == u.password

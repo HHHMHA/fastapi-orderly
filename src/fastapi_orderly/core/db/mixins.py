@@ -48,6 +48,12 @@ class ModelsMixin:
             permissions_list.extend(cls.extra_permissions)
         return tuple(permissions_list)
 
+    def __str__(self) -> str:
+        return f"<Model {self.__tablename__} - id = {self.id}>"
+
+    def __repr__(self) -> str:
+        return f"<Model {self.__tablename__} - id = {self.id}>"
+
 
 class ActivatorMixin:
     is_active: Mapped[bool] = mapped_column(server_default=sa.true())

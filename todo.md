@@ -1,10 +1,10 @@
-refresh token model (hashed) and tests to revoke it
-
-oauth2_scheme → decode_token → get_current_user → get_current_active_user → require_roles("admin")
-
 repositores and abstract one maybe with tests
 
 services register, auth, issue, refresh, revoke and tests
+
+refresh token model (hashed) and tests to revoke it
+
+oauth2_scheme → decode_token → get_current_user → get_current_active_user → require_roles("admin")
 
 deps
 
