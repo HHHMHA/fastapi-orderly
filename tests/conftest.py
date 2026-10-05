@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio.engine import AsyncTransaction
 
 from fastapi_orderly.core.config import Settings, get_settings
+from fastapi_orderly.core.db.registry import UserAccount
 from fastapi_orderly.core.db.session import Database
 from fastapi_orderly.main import create_app
 from fastapi_orderly.modules.auth.hasher import get_hasher
@@ -124,3 +125,15 @@ async def client() -> AsyncGenerator[httpx.AsyncClient]:
             yield client
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def user(no_app_db_session: AsyncSession) -> UserAccount:
+    user = UserAccount(
+        username="test",
+        email="test@example.com",
+        password="test",
+    )
+    no_app_db_session.add(user)
+    await no_app_db_session.flush()
+    return user

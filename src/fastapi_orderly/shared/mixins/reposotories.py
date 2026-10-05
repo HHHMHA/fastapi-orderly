@@ -1,8 +1,9 @@
 from collections.abc import AsyncIterator
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
-from sqlalchemy import ColumnElement, UnaryExpression, func, select
+from sqlalchemy import ColumnElement, CursorResult, UnaryExpression, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql import Select
 
 from fastapi_orderly.core.db.base import Base
@@ -12,6 +13,7 @@ OrderByT = TypeVar(
     str,
     ColumnElement[object],
     UnaryExpression[str],
+    InstrumentedAttribute[str],
 )
 
 
@@ -58,14 +60,23 @@ class RepositoryBase[T: Base]:
         result = await self.session.scalars(stmt)
         return list(result.all())
 
-    async def count(
+    async def first(
         self,
         *where: ColumnElement[bool],
         order_by: OrderByT | None = None,
-    ) -> int:
-        stmt = select(func.count()).select_from(
-            self.get_base_query(*where, order_by=order_by).subquery()
+    ) -> T | None:
+        result: list[T] = await self.filter(
+            *where,
+            limit=1,
+            order_by=order_by,
         )
+        return result[0] if result else None
+
+    async def count(
+        self,
+        *where: ColumnElement[bool],
+    ) -> int:
+        stmt = select(func.count()).select_from(self.get_base_query(*where).subquery())
         return await self.session.scalar(stmt) or 0
 
     async def page(
@@ -88,7 +99,7 @@ class RepositoryBase[T: Base]:
             offset=offset,
             order_by=order_by,
         )
-        total = await self.count(*where, order_by=order_by)
+        total = await self.count(*where)
 
         return items, total
 
@@ -100,6 +111,7 @@ class RepositoryBase[T: Base]:
 
     async def delete(self, entity: T) -> None:
         await self.session.delete(entity)
+        await self.session.flush()
 
     async def delete_by_id(self, ident: object) -> bool:
         entity = await self.get(ident)
@@ -107,10 +119,12 @@ class RepositoryBase[T: Base]:
             return False
 
         await self.delete(entity)
+        await self.session.flush()
         return True
 
-    def save(self, entity: T) -> None:
+    async def save(self, entity: T) -> None:
         self.session.add(entity)
+        await self.session.flush()
 
     async def exists(
         self,
@@ -118,3 +132,18 @@ class RepositoryBase[T: Base]:
     ) -> bool:
         stmt = self.get_base_query(*where).exists()
         return bool(await self.session.scalar(select(stmt)))
+
+    async def delete_where(
+        self,
+        *where: ColumnElement[bool],
+    ) -> int:
+        statement = delete(self.Model).where(*where)
+
+        result = cast(
+            CursorResult[Any],
+            await self.session.execute(statement),
+        )
+
+        await self.session.flush()
+
+        return result.rowcount

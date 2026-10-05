@@ -54,4 +54,19 @@ class UserPermissions(ModelsMixin, Base):
 
 
 class RefreshToken(ModelsMixin, Base):
-    token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("user_account.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    token_hash: Mapped[bytes] = mapped_column(
+        LargeBinary(32),
+        unique=True,
+        index=True,
+    )
+
+    user: Mapped["UserAccount"] = relationship(
+        "UserAccount",
+        lazy="noload",
+    )

@@ -30,7 +30,7 @@ class TestBaseRepository:
             password="test",
             email="test@example.com",
         )
-        repo.save(user)
+        await repo.save(user)
         await no_app_db_session.commit()
 
         assert user.id is not None
@@ -59,7 +59,7 @@ class TestBaseRepository:
             password="test",
             email="test@example.com",
         )
-        repo.save(user)
+        await repo.save(user)
         await no_app_db_session.commit()
 
         users = await repo.all()
@@ -81,7 +81,7 @@ class TestBaseRepository:
             for i in range(3)
         ]
         for user in users:
-            repo.save(user)
+            await repo.save(user)
 
         await no_app_db_session.commit()
 
@@ -108,7 +108,7 @@ class TestBaseRepository:
             for i in range(5)
         ]
         for user in users:
-            repo.save(user)
+            await repo.save(user)
 
         await no_app_db_session.commit()
 
@@ -136,7 +136,7 @@ class TestBaseRepository:
             for i in range(3)
         ]
         for user in users:
-            repo.save(user)
+            await repo.save(user)
 
         await no_app_db_session.commit()
 
@@ -158,7 +158,7 @@ class TestBaseRepository:
             for i in range(5)
         ]
         for user in users:
-            repo.save(user)
+            await repo.save(user)
 
         await no_app_db_session.commit()
 
@@ -225,7 +225,7 @@ class TestBaseRepository:
             for i in range(3)
         ]
         for user in users:
-            repo.save(user)
+            await repo.save(user)
 
         await no_app_db_session.commit()
 
@@ -248,7 +248,7 @@ class TestBaseRepository:
             for i in range(3)
         ]
         for user in users:
-            repo.save(user)
+            await repo.save(user)
 
         await no_app_db_session.commit()
 
@@ -272,7 +272,7 @@ class TestBaseRepository:
             password="test",
             email="test@example.com",
         )
-        repo.save(user)
+        await repo.save(user)
         await no_app_db_session.commit()
 
         await repo.delete(user)
@@ -291,7 +291,7 @@ class TestBaseRepository:
             password="test",
             email="test@example.com",
         )
-        repo.save(user)
+        await repo.save(user)
         await no_app_db_session.commit()
 
         assert user.id is not None
@@ -324,7 +324,7 @@ class TestBaseRepository:
             email="test@example.com",
         )
 
-        repo.save(user)
+        await repo.save(user)
 
         assert user in no_app_db_session
 
@@ -346,7 +346,7 @@ class TestBaseRepository:
             password="test",
             email="test@example.com",
         )
-        repo.save(user)
+        await repo.save(user)
         await no_app_db_session.commit()
 
         assert await repo.exists() is True
@@ -372,9 +372,41 @@ class TestBaseRepository:
             password="test",
             email="test@example.com",
         )
-        repo.save(user)
+        await repo.save(user)
         await no_app_db_session.commit()
 
         result = await no_app_db_session.scalars(stmt)
 
         assert result.all() == [user]
+
+    async def test_delete_where(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        users = [
+            UserAccount(
+                username=f"user{i}",
+                password="test",
+                email=f"user{i}@example.com",
+            )
+            for i in range(3)
+        ]
+
+        for user in users:
+            await repo.save(user)
+
+        await no_app_db_session.commit()
+
+        deleted = await repo.delete_where(
+            UserAccount.username == "user1",
+        )
+
+        assert deleted == 1
+
+        await no_app_db_session.commit()
+
+        assert await repo.get(users[0].id) is not None
+        assert await repo.get(users[1].id) is None
+        assert await repo.get(users[2].id) is not None

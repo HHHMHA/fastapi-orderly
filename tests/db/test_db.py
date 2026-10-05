@@ -18,12 +18,12 @@ async def test_expire_on_commit_off(no_app_db: Database, fake_request: Request) 
         session.add(u)
         await session.commit()
         assert u is not None
-        assert u.id == 1
+        assert u.id is not None
         assert u.username == "test"
         assert u.email == "test@example.com"
         assert u.password == "test"
 
-        db_u: UserAccount | None = await session.get(UserAccount, 1)
+        db_u: UserAccount | None = await session.get(UserAccount, u.id)
         assert db_u is not None
         assert str(db_u) == f"<Model {db_u.__tablename__} - id = {db_u.id}>"
         assert repr(db_u) == f"<Model {db_u.__tablename__} - id = {db_u.id}>"
@@ -31,7 +31,8 @@ async def test_expire_on_commit_off(no_app_db: Database, fake_request: Request) 
         assert db_u.email == u.email
         assert db_u.password == u.password
         assert db_u.id == u.id
+        old_id = db_u.id
         await session.delete(db_u)
         await session.commit()
-        db_u = await session.get(UserAccount, 1)
+        db_u = await session.get(UserAccount, old_id)
         assert db_u is None
