@@ -1,6 +1,33 @@
-repositores and abstract one maybe with tests
+services register, auth, issue, refresh, revoke and tests:
+registration:
+notifications/
+├── service.py
+├── base.py
+├── channels/
+│   ├── email.py
+│   ├── sms.py
+│   └── push.py
+├── notifications/
+│   ├── user_verification.py
+│   ├── password_reset.py
+│   ├── welcome.py
+│   └── login_alert.py
+└── templates/
+    ├── email/
+    └── sms/
 
-services register, auth, issue, refresh, revoke and tests
+otp model
+otp repo
+otp service
+
+register request -> is admin false, is active false, is verified false -> send otp email
+check otp -> update user to is_active=True, is_verified=True (rate limit)
+
+login request -> issue token
+refresh token request -> issue new token (and rotate refresh token)
+get current active user -> require_permission (refresh token not accepted)
+revoke token
+log out all (revoke all refresh tokens)
 
 refresh token model (hashed) and tests to revoke it
 

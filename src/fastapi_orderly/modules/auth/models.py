@@ -26,6 +26,7 @@ class UserAccount(ModelsMixin, ActivatorMixin, Base):
     is_admin: Mapped[bool] = mapped_column(
         server_default=false()
     )  # faster than 2 db queries for permissions
+    is_email_verified: Mapped[bool] = mapped_column(server_default=false())
 
 
 class UserPermissions(ModelsMixin, Base):
