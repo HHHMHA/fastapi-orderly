@@ -1,12 +1,19 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, EmailStr, SecretStr, field_validator
 
 
 class RegisterUserRequest(BaseModel):
     username: str
-    password: str
-    email: str
+    password: SecretStr
+    email: EmailStr
+
+    @field_validator("email", mode="after")
+    @classmethod
+    def normalize_email(cls, value: EmailStr) -> EmailStr:
+        return str(value).strip().lower()
 
 
 class UserContactInfo(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     username: str
     email: str

@@ -6,11 +6,12 @@ from fastapi_orderly.modules.notifications.channels.email.sender import LogEmail
 from fastapi_orderly.modules.notifications.channels.email.utils import EmailAttachment
 
 
-def test_log_email_sender_logs_basic_email(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_log_email_sender_logs_basic_email(caplog: pytest.LogCaptureFixture) -> None:
     sender = LogEmailSender()
 
     with caplog.at_level(logging.INFO):
-        sender.send_email(
+        await sender.send_email(
             from_email="sender@example.com",
             recipients=["recipient@example.com"],
             subject="Test subject",
@@ -29,7 +30,8 @@ def test_log_email_sender_logs_basic_email(caplog: pytest.LogCaptureFixture) -> 
     assert "│ This is a test." in message
 
 
-def test_log_email_sender_logs_all_optional_fields(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_log_email_sender_logs_all_optional_fields(caplog: pytest.LogCaptureFixture) -> None:
     sender = LogEmailSender()
 
     attachment = EmailAttachment(
@@ -39,7 +41,7 @@ def test_log_email_sender_logs_all_optional_fields(caplog: pytest.LogCaptureFixt
     )
 
     with caplog.at_level(logging.INFO):
-        sender.send_email(
+        await sender.send_email(
             from_email="sender@example.com",
             recipients=[
                 "first@example.com",
@@ -70,7 +72,8 @@ def test_log_email_sender_logs_all_optional_fields(caplog: pytest.LogCaptureFixt
     assert "│ World" in message
 
 
-def test_log_email_sender_logs_multiple_attachments(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_log_email_sender_logs_multiple_attachments(caplog: pytest.LogCaptureFixture) -> None:
     sender = LogEmailSender()
 
     attachments = [
@@ -87,7 +90,7 @@ def test_log_email_sender_logs_multiple_attachments(caplog: pytest.LogCaptureFix
     ]
 
     with caplog.at_level(logging.INFO):
-        sender.send_email(
+        await sender.send_email(
             from_email="sender@example.com",
             recipients=["recipient@example.com"],
             subject="Attachments",
@@ -102,11 +105,12 @@ def test_log_email_sender_logs_multiple_attachments(caplog: pytest.LogCaptureFix
     assert "second.json (application/json, 14 bytes)" in message
 
 
-def test_log_email_sender_handles_empty_body(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_log_email_sender_handles_empty_body(caplog: pytest.LogCaptureFixture) -> None:
     sender = LogEmailSender()
 
     with caplog.at_level(logging.INFO):
-        sender.send_email(
+        await sender.send_email(
             from_email="sender@example.com",
             recipients=["recipient@example.com"],
             subject="Empty body",
@@ -119,13 +123,14 @@ def test_log_email_sender_handles_empty_body(caplog: pytest.LogCaptureFixture) -
     assert "Body:" in message
 
 
-def test_log_email_sender_does_not_log_absent_optional_fields(
+@pytest.mark.asyncio
+async def test_log_email_sender_does_not_log_absent_optional_fields(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     sender = LogEmailSender()
 
     with caplog.at_level(logging.INFO):
-        sender.send_email(
+        await sender.send_email(
             from_email="sender@example.com",
             recipients=["recipient@example.com"],
             subject="Test",

@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from typing import cast
+
+import pytest
 
 from fastapi_orderly.modules.auth.dtos import UserContactInfo
 from fastapi_orderly.modules.notifications.channels.base import (
@@ -10,6 +13,7 @@ from fastapi_orderly.modules.notifications.channels.email.channel import (
 from fastapi_orderly.modules.notifications.channels.options import ChannelType
 from fastapi_orderly.modules.notifications.notification_type import NotificationType
 from fastapi_orderly.modules.notifications.services import NotificationService
+from tests.conftest import FakeNotificationChannel
 
 
 @dataclass
@@ -27,33 +31,18 @@ class FakeNotificationType(NotificationType):
         )
 
 
-class FakeNotificationChannel:
-    def __init__(self) -> None:
-        self.calls: list[tuple[NotificationType, ChannelOptions]] = []
-
-    def send(
-        self,
-        notification_type: NotificationType,
-        options: ChannelOptions,
-    ) -> None:
-        self.calls.append((notification_type, options))
-
-
-def test_dispatch_sends_notification_to_matching_channel() -> None:
-    email_channel = FakeNotificationChannel()
-
-    service = NotificationService(
-        channels={
-            ChannelType.EMAIL: email_channel,
-        }
-    )
+@pytest.mark.asyncio
+async def test_dispatch_sends_notification_to_matching_channel(
+    notification_service: NotificationService,
+) -> None:
 
     notification = FakeNotificationType(
         users=[UserContactInfo(email="test@example.com", username="test1")],
         context={},
     )
+    email_channel = cast(FakeNotificationChannel, notification_service._channels[ChannelType.EMAIL])
 
-    service.dispatch(notification)
+    await notification_service.dispatch(notification)
 
     assert len(email_channel.calls) == 1
 
@@ -67,7 +56,8 @@ def test_dispatch_sends_notification_to_matching_channel() -> None:
     assert NotificationType([], {}).channel_options_tuple == ()
 
 
-def test_dispatch_does_nothing_when_channel_is_not_registered() -> None:
+@pytest.mark.asyncio
+async def test_dispatch_does_nothing_when_channel_is_not_registered() -> None:
     service = NotificationService(channels={})
 
     notification = FakeNotificationType(
@@ -75,10 +65,11 @@ def test_dispatch_does_nothing_when_channel_is_not_registered() -> None:
         context={},
     )
 
-    service.dispatch(notification)
+    await service.dispatch(notification)
 
 
-def test_dispatch_does_nothing_when_notification_has_no_channels() -> None:
+@pytest.mark.asyncio
+async def test_dispatch_does_nothing_when_notification_has_no_channels() -> None:
     class EmptyNotificationType(NotificationType):
         slug = "empty"
         title = "Empty"
@@ -94,4 +85,4 @@ def test_dispatch_does_nothing_when_notification_has_no_channels() -> None:
         context={},
     )
 
-    service.dispatch(notification)
+    await service.dispatch(notification)

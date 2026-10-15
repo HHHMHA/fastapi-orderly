@@ -55,7 +55,7 @@ class FakeEmailSender:
     def __init__(self) -> None:
         self.sent_emails: list[SentEmail] = []
 
-    def send_email(
+    async def send_email(
         self,
         *,
         from_email: str,
@@ -104,14 +104,15 @@ def email_channel(fake_sender: FakeEmailSender) -> EmailChannel:
     return EmailChannel(sender=fake_sender)
 
 
-def test_send_email(
+@pytest.mark.asyncio
+async def test_send_email(
     email_channel: EmailChannel,
     fake_sender: FakeEmailSender,
     fake_notification: FakeNotificationType,
 ) -> None:
     email_options = fake_notification.channel_options_tuple[0]
 
-    email_channel.send(fake_notification, email_options)
+    await email_channel.send(fake_notification, email_options)
 
     assert len(fake_sender.sent_emails) == 1
 
@@ -137,7 +138,8 @@ def test_send_email(
     ]
 
 
-def test_send_email_with_default_options(
+@pytest.mark.asyncio
+async def test_send_email_with_default_options(
     email_channel: EmailChannel,
     fake_sender: FakeEmailSender,
     fake_notification: FakeNotificationType,
@@ -147,7 +149,7 @@ def test_send_email_with_default_options(
         body="Hello",
     )
 
-    email_channel.send(fake_notification, options)
+    await email_channel.send(fake_notification, options)
 
     sent_email = fake_sender.sent_emails[0]
 
@@ -165,11 +167,12 @@ def test_send_email_with_default_options(
     assert sent_email.attachments is None
 
 
-def test_send_rejects_invalid_options(
+@pytest.mark.asyncio
+async def test_send_rejects_invalid_options(
     email_channel: EmailChannel,
     fake_notification: FakeNotificationType,
 ) -> None:
     invalid_options = ChannelOptions()
 
     with pytest.raises(ValueError, match="Invalid options for EmailChannel"):
-        email_channel.send(fake_notification, invalid_options)
+        await email_channel.send(fake_notification, invalid_options)

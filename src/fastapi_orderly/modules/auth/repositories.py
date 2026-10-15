@@ -1,9 +1,12 @@
 from fastapi_orderly.modules.auth.models import RefreshToken, UserAccount, UserPermissions
-from fastapi_orderly.shared.mixins.reposotories import RepositoryBase
+from fastapi_orderly.shared.mixins.reposotories import (
+    ActivatorRepositoryMixin,
+    RepositoryBase,
+)
 
 
-class UserRepository(RepositoryBase[UserAccount]):
-    Model: type[UserAccount] = UserAccount
+class UserRepository(ActivatorRepositoryMixin[UserAccount]):
+    Model = UserAccount
 
     async def get_by_username(
         self,
@@ -29,6 +32,20 @@ class UserRepository(RepositoryBase[UserAccount]):
             (self.Model.username == identifier) | (self.Model.email == identifier),
         )
 
+    async def get_by_username_or_email_and_active(
+        self,
+        identifier: str,
+    ) -> UserAccount | None:
+        stmt = (
+            self.filter_is_active()
+            .where(
+                (self.Model.username == identifier) | (self.Model.email == identifier),
+            )
+            .limit(1)
+        )
+        result = await self.run(stmt)
+        return result[0] if result else None
+
     async def username_exists(
         self,
         username: str,
@@ -47,7 +64,7 @@ class UserRepository(RepositoryBase[UserAccount]):
 
 
 class UserPermissionsRepository(RepositoryBase[UserPermissions]):
-    Model: type[UserPermissions] = UserPermissions
+    Model = UserPermissions
 
     async def get_by_user_and_permission(
         self,
@@ -107,7 +124,7 @@ class UserPermissionsRepository(RepositoryBase[UserPermissions]):
 
 
 class RefreshTokenRepository(RepositoryBase[RefreshToken]):
-    Model: type[RefreshToken] = RefreshToken
+    Model = RefreshToken
 
     async def get_by_hash(
         self,

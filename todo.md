@@ -1,26 +1,12 @@
 services register, auth, issue, refresh, revoke and tests:
-registration:
-notifications/
-├── service.py
-├── base.py
-├── channels/
-│   ├── email.py
-│   ├── sms.py
-│   └── push.py
-├── notifications/
-│   ├── user_verification.py
-│   ├── password_reset.py
-│   ├── welcome.py
-│   └── login_alert.py
-└── templates/
-    ├── email/
-    └── sms/
-
-otp model
-otp repo
-otp service
 
 register request -> is admin false, is active false, is verified false -> send otp email
+to test
+
+RegisterUserRequest normalize email
+
+UserService register_user with dup cases
+
 check otp -> update user to is_active=True, is_verified=True (rate limit)
 
 login request -> issue token
@@ -40,3 +26,5 @@ endpoints and tests
 exceptions
 
 Rotation with reuse detection. This is the part worth building carefully. Each refresh token carries a family_id. On refresh: verify, mark the presented token used, issue a new one in the same family. If a token marked used is presented again, that means two parties hold it — one of them stole it — so revoke the entire family and force re-authentication. Without this, a stolen refresh token grants indefinite access; with it, the theft becomes self-detecting the moment either party uses it.
+
+translations

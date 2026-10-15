@@ -1,9 +1,12 @@
 from enum import StrEnum
 from importlib.metadata import version
 
-from pydantic import BaseModel, SecretStr
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy import URL
+
+from fastapi_orderly.core.config.auth import AuthSettings
+from fastapi_orderly.core.config.db import DatabaseSettings
+from fastapi_orderly.core.config.email import EmailSettings
 
 
 class Environment(StrEnum):
@@ -21,27 +24,6 @@ class LogLevel(StrEnum):
     DEBUG = "DEBUG"
 
 
-class DatabaseSettings(BaseModel):
-    name: str
-    user: str
-    password: SecretStr
-    port: int
-    host: str
-    driver: str
-
-    @property
-    def url(self) -> URL:
-        url: URL = URL.create(
-            drivername=self.driver,
-            username=self.user,
-            password=self.password.get_secret_value(),
-            host=self.host,
-            port=self.port,
-            database=self.name,
-        )
-        return url
-
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_nested_delimiter="__", env_file_encoding="utf-8", extra="ignore"
@@ -53,3 +35,5 @@ class Settings(BaseSettings):
     log_level: LogLevel = LogLevel.INFO
     version: str = version("fastapi-orderly")
     db: DatabaseSettings
+    auth: AuthSettings
+    email: EmailSettings

@@ -25,14 +25,14 @@ class EmailChannel(NotificationChannel):
     def __init__(self, sender: EmailSender) -> None:
         self.sender = sender
 
-    def send(self, notification_type: NotificationType, options: ChannelOptions) -> None:
+    async def send(self, notification_type: NotificationType, options: ChannelOptions) -> None:
         if not isinstance(options, EmailChannelOptions):
             raise ValueError("Invalid options for EmailChannel")
 
         email_options: EmailChannelOptions = options
 
         # TODO: add rest of options
-        self.sender.send_email(
+        await self.sender.send_email(
             from_email=email_options.from_email,
             recipients=[user.email for user in notification_type.users],
             subject=notification_type.title,

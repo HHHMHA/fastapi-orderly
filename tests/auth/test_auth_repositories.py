@@ -65,6 +65,25 @@ class TestUserRepository:
         assert await repo.get_by_username_or_email("test@example.com") == user
         assert await repo.get_by_username_or_email("missing") is None
 
+    async def test_get_by_username_or_email_and_active(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = UserRepository(no_app_db_session)
+
+        user = UserAccount(
+            username="test", password="password", email="test@example.com", is_active=False
+        )
+        await repo.save(user)
+        await no_app_db_session.commit()
+
+        assert await repo.get_by_username_or_email_and_active("test") is None
+        assert await repo.get_by_username_or_email_and_active("test@example.com") is None
+        user.is_active = True
+        await no_app_db_session.commit()
+        assert await repo.get_by_username_or_email_and_active("test") == user
+        assert await repo.get_by_username_or_email_and_active("test@example.com") == user
+
     async def test_username_exists(
         self,
         no_app_db_session: AsyncSession,

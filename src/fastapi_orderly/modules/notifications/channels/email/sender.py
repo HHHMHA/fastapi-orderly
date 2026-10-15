@@ -7,7 +7,7 @@ logger = logging.getLogger("email")
 
 
 class EmailSender(Protocol):
-    def send_email(
+    async def send_email(
         self,
         *,
         from_email: str,
@@ -23,7 +23,7 @@ class EmailSender(Protocol):
 
 
 class LogEmailSender(EmailSender):
-    def send_email(
+    async def send_email(
         self,
         *,
         from_email: str,

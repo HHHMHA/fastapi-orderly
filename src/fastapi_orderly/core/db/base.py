@@ -1,6 +1,8 @@
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
 
+from fastapi_orderly.core.db.mixins import ActivatorMixin
+
 
 class Base(DeclarativeBase):
     metadata = MetaData(
@@ -12,3 +14,7 @@ class Base(DeclarativeBase):
             "pk": "pk_%(table_name)s",
         }
     )
+
+
+class ActivatableBase(Base, ActivatorMixin):
+    __abstract__ = True

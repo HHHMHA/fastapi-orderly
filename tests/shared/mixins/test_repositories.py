@@ -2,10 +2,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_orderly.modules.auth.models import UserAccount
-from fastapi_orderly.shared.mixins.reposotories import RepositoryBase
+from fastapi_orderly.shared.mixins.reposotories import ActivatorRepositoryMixin, RepositoryBase
 
 
-class FakeUserRepository(RepositoryBase[UserAccount]):
+class FakeUserRepository(ActivatorRepositoryMixin[UserAccount]):
     Model: type[UserAccount] = UserAccount
 
 
@@ -410,3 +410,270 @@ class TestBaseRepository:
         assert await repo.get(users[0].id) is not None
         assert await repo.get(users[1].id) is None
         assert await repo.get(users[2].id) is not None
+
+    async def test_run(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        users = [
+            UserAccount(
+                username=f"user{i}",
+                password="test",
+                email=f"user{i}@example.com",
+            )
+            for i in range(3)
+        ]
+        for user in users:
+            await repo.save(user)
+        await no_app_db_session.commit()
+
+        result = await repo.run(repo.get_base_query())
+
+        assert result == users
+
+    async def test_get_or_else_returns_existing(
+        self, no_app_db_session: AsyncSession, user: UserAccount
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        handler_called = False
+
+        def handler() -> UserAccount:
+            nonlocal handler_called
+            handler_called = True
+            return UserAccount(
+                username="fallback",
+                password="test",
+                email="fallback@example.com",
+            )
+
+        result = await repo.get_or_else(
+            UserAccount.username == "test",
+            handler=handler,
+        )
+
+        assert result is user
+        assert handler_called is False
+
+    async def test_get_or_else_calls_handler_when_missing(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+        fallback = UserAccount(
+            username="fallback",
+            password="test",
+            email="fallback@example.com",
+        )
+
+        result = await repo.get_or_else(
+            UserAccount.username == "missing",
+            handler=lambda: fallback,
+        )
+
+        assert result is fallback
+
+    async def test_get_or_else_returns_none_when_handler_returns_none(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        result = await repo.get_or_else(
+            UserAccount.username == "missing",
+            handler=lambda: None,
+        )
+
+        assert result is None
+
+    async def test_get_or_merge_inserts_when_missing(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+        incoming = UserAccount(
+            username="test",
+            password="test",
+            email="test@example.com",
+        )
+
+        result = await repo.get_or_merge(
+            UserAccount.username == "test",
+            handler=lambda: incoming,
+        )
+
+        assert result is incoming
+        assert incoming in no_app_db_session
+
+        await no_app_db_session.commit()
+
+        assert incoming.id is not None
+        assert await repo.get(incoming.id) is incoming
+
+    async def test_get_or_merge_returns_existing_when_handler_returns_none(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+        existing = UserAccount(
+            username="existing",
+            password="original",
+            email="existing@example.com",
+        )
+        await repo.save(existing)
+        await no_app_db_session.commit()
+
+        result = await repo.get_or_merge(
+            UserAccount.username == "existing",
+            handler=lambda: None,
+        )
+
+        assert result is existing
+        assert existing.password == "original"
+        assert existing.email == "existing@example.com"
+
+    async def test_get_or_merge_updates_existing(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+        existing = UserAccount(
+            username="test",
+            password="original",
+            email="original@example.com",
+        )
+        await repo.save(existing)
+        await no_app_db_session.commit()
+
+        incoming = UserAccount(
+            username="test",
+            password="updated",
+            email="updated@example.com",
+        )
+
+        result = await repo.get_or_merge(
+            UserAccount.username == "test",
+            handler=lambda: incoming,
+        )
+
+        assert result is existing
+        assert existing.password == "updated"
+        assert existing.email == "updated@example.com"
+
+        await no_app_db_session.commit()
+
+        refreshed = await repo.get(existing.id)
+        assert refreshed is not None
+        assert refreshed is existing
+        assert refreshed.password == "updated"
+        assert refreshed.email == "updated@example.com"
+
+    async def test_get_or_merge_excludes_fields(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+        existing = UserAccount(
+            username="test",
+            password="original",
+            email="original@example.com",
+        )
+        await repo.save(existing)
+        await no_app_db_session.commit()
+
+        incoming = UserAccount(
+            username="test",
+            password="updated",
+            email="updated@example.com",
+        )
+
+        result = await repo.get_or_merge(
+            UserAccount.username == "test",
+            handler=lambda: incoming,
+            exclude=(UserAccount.password,),
+        )
+
+        assert result is existing
+        assert existing.password == "original"
+        assert existing.email == "updated@example.com"
+
+    async def test_get_existing_fields(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        user = UserAccount(
+            username="test",
+            password="test",
+            email="test@example.com",
+        )
+        await repo.save(user)
+        await no_app_db_session.commit()
+
+        result = await repo.get_existing_fields(
+            username=UserAccount.username == "test",
+            email=UserAccount.email == "test@example.com",
+            missing=UserAccount.username == "missing",
+        )
+
+        assert result == {"username", "email"}
+
+    async def test_get_existing_fields_returns_empty_set_when_no_match(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        result = await repo.get_existing_fields(
+            username=UserAccount.username == "missing",
+            email=UserAccount.email == "missing@example.com",
+        )
+
+        assert result == set()
+
+    async def test_get_existing_fields_returns_empty_set_without_conditions(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        result = await repo.get_existing_fields()
+
+        assert result == set()
+
+    async def test_filter_is_active(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        user = UserAccount(
+            username="test",
+            password="test",
+            email="test@example.com",
+            is_active=False,
+        )
+        await repo.save(user)
+        await no_app_db_session.commit()
+
+        result = await repo.run(repo.filter_is_active())
+
+        assert not result
+
+        result = await repo.run(repo.filter_is_disabled())
+
+        assert result == [user]
+
+        user.is_active = True
+        await repo.session.commit()
+
+        result = await repo.run(repo.filter_is_active())
+
+        assert result == [user]
+
+        result = await repo.run(repo.filter_is_disabled())
+
+        assert not result

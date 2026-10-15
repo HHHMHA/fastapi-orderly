@@ -7,7 +7,7 @@ from fastapi_orderly.modules.notifications.notification_type import Notification
 
 class NotificationChannel(Protocol):
     @abstractmethod
-    def send(
+    async def send(
         self,
         notification_type: NotificationType,
         options: ChannelOptions,

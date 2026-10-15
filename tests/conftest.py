@@ -15,7 +15,14 @@ from fastapi_orderly.core.config import Settings, get_settings
 from fastapi_orderly.core.db.registry import UserAccount
 from fastapi_orderly.core.db.session import Database
 from fastapi_orderly.main import create_app
+from fastapi_orderly.modules.auth.deps import get_user_repository, get_user_service
 from fastapi_orderly.modules.auth.hasher import get_hasher
+from fastapi_orderly.modules.auth.services import UserService
+from fastapi_orderly.modules.notifications.channels.options import ChannelOptions, ChannelType
+from fastapi_orderly.modules.notifications.notification_type import NotificationType
+from fastapi_orderly.modules.notifications.services import NotificationService
+from fastapi_orderly.modules.otp.deps import get_otp_repository, get_otp_service
+from fastapi_orderly.modules.otp.services import OTPService
 from tests.utils import FakeHasher
 
 
@@ -137,3 +144,52 @@ async def user(no_app_db_session: AsyncSession) -> UserAccount:
     no_app_db_session.add(user)
     await no_app_db_session.flush()
     return user
+
+
+class FakeNotificationChannel:
+    def __init__(self) -> None:
+        self.calls: list[tuple[NotificationType, ChannelOptions]] = []
+
+    async def send(
+        self,
+        notification_type: NotificationType,
+        options: ChannelOptions,
+    ) -> None:
+        self.calls.append((notification_type, options))
+
+
+@pytest.fixture
+def notification_service() -> NotificationService:
+    email_channel = FakeNotificationChannel()
+
+    service = NotificationService(
+        channels={
+            ChannelType.EMAIL: email_channel,
+        }
+    )
+    return service
+
+
+@pytest.fixture
+def otp_service(
+    no_app_db_session: AsyncSession,
+    notification_service: NotificationService,
+) -> OTPService:
+    return get_otp_service(
+        get_otp_repository(session=no_app_db_session),
+        hasher=FakeHasher(),
+        settings=get_settings(),
+        notification_service=notification_service,
+    )
+
+
+@pytest.fixture
+def user_service(
+    no_app_db_session: AsyncSession,
+    otp_service: OTPService,
+) -> UserService:
+    return get_user_service(
+        user_repository=get_user_repository(session=no_app_db_session),
+        hasher=FakeHasher(),
+        otp_service=otp_service,
+    )
