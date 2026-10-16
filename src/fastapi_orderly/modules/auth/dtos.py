@@ -17,3 +17,11 @@ class UserContactInfo(BaseModel):
 
     username: str
     email: str
+
+
+class UserDetailsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    username: str
+    email: EmailStr
+    is_email_verified: bool

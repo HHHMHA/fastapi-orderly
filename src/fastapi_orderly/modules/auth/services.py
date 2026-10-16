@@ -40,7 +40,7 @@ class UserService:
     async def register_user(
         self,
         register_request: RegisterUserRequest,
-    ) -> None:
+    ) -> UserAccount:
         duplicates = await self.user_repository.get_existing_fields(
             email=UserAccount.email == register_request.email,
             username=UserAccount.username == register_request.username,
@@ -60,3 +60,4 @@ class UserService:
         await self.user_repository.save(user)
         await self.otp_service.generate_and_send(user.id, UserContactInfo.model_validate(user))
         await self.user_repository.session.commit()
+        return user

@@ -1,4 +1,6 @@
+import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock, patch
 
 from fastapi_orderly.core.config import get_settings
 from fastapi_orderly.modules.auth.deps import get_tokenizer
@@ -28,5 +30,44 @@ class TestTokenizer:
         )  # this makes the test dependant on the specific token format
 
         decoded = self.tokenizer.decode(token)
+        assert decoded == claims
+
+    def test_decode_payload_as_dict(self) -> None:
+        claims = TokenClaims(
+            sub="1",
+            exp=datetime.now(UTC) + timedelta(minutes=15),
+            iat=datetime.now(UTC),
+            jti="550e8400-e29b-41d4-a716-446655440000",
+            iss="my-auth-service",
+            aud="my-api",
+            typ="access",
+        )
+        payload = claims.model_dump(mode="json")
+
+        with patch(
+            "fastapi_orderly.modules.auth.token.pyseto.decode",
+            return_value=Mock(payload=payload),
+        ):
+            decoded = self.tokenizer.decode(b"dummy-token")
+
+        assert decoded == claims
+
+    def test_decode_payload_as_bytes(self) -> None:
+        claims = TokenClaims(
+            sub="1",
+            exp=datetime.now(UTC) + timedelta(minutes=15),
+            iat=datetime.now(UTC),
+            jti="550e8400-e29b-41d4-a716-446655440000",
+            iss="my-auth-service",
+            aud="my-api",
+            typ="access",
+        )
+        payload = claims.model_dump(mode="json")
+
+        with patch(
+            "fastapi_orderly.modules.auth.token.pyseto.decode",
+            return_value=Mock(payload=json.dumps(payload).encode()),
+        ):
+            decoded = self.tokenizer.decode(b"dummy-token")
 
         assert decoded == claims

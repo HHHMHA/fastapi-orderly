@@ -20,7 +20,7 @@ def get_otp_service(
     otp_repository: Annotated[OTPRepository, Depends(get_otp_repository)],
     hasher: Annotated[Hasher, Depends(get_hasher)],
     settings: Annotated[Settings, Depends(get_settings)],
-    notification_service: Annotated[NotificationService, get_notification_service],
+    notification_service: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> OTPService:
     return OTPService(
         otp_repository=otp_repository,

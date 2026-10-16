@@ -22,10 +22,10 @@ class TestUserService:
             password=SecretStr("secure-password"),
         )
 
-        await user_service.register_user(request)
+        service_user = await user_service.register_user(request)
 
         user = await user_service.user_repository.get_by_email("newuser@example.com")
-
+        assert service_user == user
         assert user is not None
         assert user.username == "newuser"
         assert user.email == "newuser@example.com"

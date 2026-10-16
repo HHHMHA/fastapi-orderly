@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio.engine import AsyncTransaction
 
 from fastapi_orderly.core.config import Settings, get_settings
 from fastapi_orderly.core.db.registry import UserAccount
-from fastapi_orderly.core.db.session import Database
+from fastapi_orderly.core.db.session import Database, get_session
 from fastapi_orderly.main import create_app
 from fastapi_orderly.modules.auth.deps import get_user_repository, get_user_service
 from fastapi_orderly.modules.auth.hasher import get_hasher
@@ -120,9 +120,14 @@ def fake_request() -> Request:
 
 
 @pytest_asyncio.fixture
-async def client() -> AsyncGenerator[httpx.AsyncClient]:
+async def client(no_app_db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClient]:
     app = create_app()
     app.dependency_overrides[get_hasher] = FakeHasher
+
+    async def override_get_session() -> AsyncGenerator[AsyncSession]:
+        yield no_app_db_session
+
+    app.dependency_overrides[get_session] = override_get_session
 
     try:
         async with httpx.AsyncClient(
