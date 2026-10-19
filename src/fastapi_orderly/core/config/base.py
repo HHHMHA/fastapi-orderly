@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from fastapi_orderly.core.config.auth import AuthSettings
 from fastapi_orderly.core.config.db import DatabaseSettings
 from fastapi_orderly.core.config.email import EmailSettings
+from fastapi_orderly.core.config.redis import RedisSettings
 
 
 class Environment(StrEnum):
@@ -37,3 +38,4 @@ class Settings(BaseSettings):
     db: DatabaseSettings
     auth: AuthSettings
     email: EmailSettings
+    redis: RedisSettings

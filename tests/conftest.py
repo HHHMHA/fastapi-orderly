@@ -8,12 +8,14 @@ import pytest_asyncio
 from alembic import command
 from alembic.config import Config
 from fastapi import Request
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio.engine import AsyncTransaction
 
 from fastapi_orderly.core.config import Settings, get_settings
 from fastapi_orderly.core.db.registry import UserAccount
 from fastapi_orderly.core.db.session import Database, get_session
+from fastapi_orderly.core.redis_con import get_redis, setup_redis
 from fastapi_orderly.main import create_app
 from fastapi_orderly.modules.auth.deps import get_user_repository, get_user_service
 from fastapi_orderly.modules.auth.hasher import get_hasher
@@ -120,26 +122,6 @@ def fake_request() -> Request:
 
 
 @pytest_asyncio.fixture
-async def client(no_app_db_session: AsyncSession) -> AsyncGenerator[httpx.AsyncClient]:
-    app = create_app()
-    app.dependency_overrides[get_hasher] = FakeHasher
-
-    async def override_get_session() -> AsyncGenerator[AsyncSession]:
-        yield no_app_db_session
-
-    app.dependency_overrides[get_session] = override_get_session
-
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://test",
-        ) as client:
-            yield client
-    finally:
-        app.dependency_overrides.clear()
-
-
-@pytest_asyncio.fixture
 async def user(no_app_db_session: AsyncSession) -> UserAccount:
     user = UserAccount(
         username="test",
@@ -175,16 +157,30 @@ def notification_service() -> NotificationService:
     return service
 
 
+@pytest_asyncio.fixture
+async def redis_client() -> AsyncGenerator[Redis]:
+    redis = setup_redis(get_settings())
+
+    try:
+        await redis.flushdb()
+        yield redis
+    finally:
+        await redis.flushdb()
+        await redis.aclose()
+
+
 @pytest.fixture
 def otp_service(
     no_app_db_session: AsyncSession,
     notification_service: NotificationService,
+    redis_client: Redis,
 ) -> OTPService:
     return get_otp_service(
         get_otp_repository(session=no_app_db_session),
         hasher=FakeHasher(),
         settings=get_settings(),
         notification_service=notification_service,
+        redis=redis_client,
     )
 
 
@@ -198,3 +194,26 @@ def user_service(
         hasher=FakeHasher(),
         otp_service=otp_service,
     )
+
+
+@pytest_asyncio.fixture
+async def client(
+    no_app_db_session: AsyncSession, redis_client: Redis
+) -> AsyncGenerator[httpx.AsyncClient]:
+    app = create_app()
+    app.dependency_overrides[get_hasher] = lambda: FakeHasher()
+    app.dependency_overrides[get_redis] = lambda: redis_client
+
+    async def override_get_session() -> AsyncGenerator[AsyncSession]:
+        yield no_app_db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()

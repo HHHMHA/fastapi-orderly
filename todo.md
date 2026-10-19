@@ -1,11 +1,5 @@
 services register, auth, issue, refresh, revoke and tests:
-
-register request -> is admin false, is active false, is verified false -> send otp email
-to test
-
-RegisterUserRequest normalize email
-
-UserService register_user with dup cases
+resend otp rate limit
 
 check otp -> update user to is_active=True, is_verified=True (rate limit)
 

@@ -8,19 +8,29 @@ from fastapi_orderly.core.config import get_settings
 from fastapi_orderly.core.config.base import Environment
 from fastapi_orderly.core.db.session import Database
 from fastapi_orderly.core.loggers import logger, setup_logging
+from fastapi_orderly.core.redis_con import setup_redis
 from fastapi_orderly.routers import add_routers
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[dict[str, Any]]:
     setup_logging(app)
-    database = Database(get_settings())
     logger.info("Starting app lifespan")
+    settings = get_settings()
+    database = Database(settings)
+    redis = setup_redis(settings)
 
-    yield {"database": database}
+    try:
+        await redis.ping()
 
-    await database.dispose()
-    logger.info("Exiting app lifespan")
+        yield {
+            "database": database,
+            "redis": redis,
+        }
+    finally:
+        await redis.aclose()
+        await database.dispose()
+        logger.info("Exiting app lifespan")
 
 
 def create_app() -> FastAPI:

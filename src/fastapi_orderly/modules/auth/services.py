@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from fastapi_orderly.core.db.registry import UserAccount
+from fastapi_orderly.core.loggers import logger
 from fastapi_orderly.modules.auth.dtos import RegisterUserRequest, UserContactInfo
 from fastapi_orderly.modules.auth.errors import UserAlreadyRegisteredError
 from fastapi_orderly.modules.auth.hasher import Hasher
@@ -59,5 +60,14 @@ class UserService:
 
         await self.user_repository.save(user)
         await self.otp_service.generate_and_send(user.id, UserContactInfo.model_validate(user))
-        await self.user_repository.session.commit()
         return user
+
+    async def resend_otp(self, email: str) -> None:
+        user = await self.user_repository.get_by_email(email)
+        if user is None:
+            logger.info(
+                "OTP resend skipped",
+                extra={"reason": "account_not_found"},
+            )
+            return None  #  keep emails private with silent fails but maybe we should log the case
+        await self.otp_service.generate_and_send(user.id, UserContactInfo.model_validate(user))

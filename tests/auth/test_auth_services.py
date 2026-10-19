@@ -1,9 +1,11 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_orderly.core.db.registry import UserAccount
-from fastapi_orderly.modules.auth.dtos import RegisterUserRequest
+from fastapi_orderly.modules.auth.dtos import RegisterUserRequest, UserContactInfo
 from fastapi_orderly.modules.auth.errors import UserAlreadyRegisteredError
 from fastapi_orderly.modules.auth.services import UserService
 from tests.utils import FakeHasher
@@ -100,3 +102,36 @@ class TestUserService:
     def test_user_already_exist_empty_error(self) -> None:
         with pytest.raises(ValueError):
             UserAlreadyRegisteredError()
+
+    @pytest.mark.asyncio
+    async def test_resend_otp(
+        self,
+        user: UserAccount,
+        user_service: UserService,
+    ) -> None:
+        with patch.object(
+            user_service.otp_service,
+            "generate_and_send",
+            new_callable=AsyncMock,
+        ) as mock_generate_and_send:
+            await user_service.resend_otp(user.email)
+
+        mock_generate_and_send.assert_awaited_once_with(
+            user.id,
+            UserContactInfo.model_validate(user),
+        )
+
+    @pytest.mark.asyncio
+    async def test_resend_otp_for_nonexistent_user(
+        self,
+        user_service: UserService,
+    ) -> None:
+        with patch.object(
+            user_service.otp_service,
+            "generate_and_send",
+            new_callable=AsyncMock,
+        ) as mock_generate_and_send:
+            result = await user_service.resend_otp("nonexistent@example.com")
+
+        assert result is None
+        mock_generate_and_send.assert_not_awaited()

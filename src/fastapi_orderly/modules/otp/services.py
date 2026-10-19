@@ -1,10 +1,13 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from redis.asyncio import Redis
+
 from fastapi_orderly.core.config import Settings
 from fastapi_orderly.modules.auth.dtos import UserContactInfo
 from fastapi_orderly.modules.auth.hasher import Hasher
 from fastapi_orderly.modules.notifications.services import NotificationService
+from fastapi_orderly.modules.otp.errors import OTPRateLimitError
 from fastapi_orderly.modules.otp.models import OneTimePassword
 from fastapi_orderly.modules.otp.notifications import OTPNotification
 from fastapi_orderly.modules.otp.repositories import OTPRepository
@@ -17,6 +20,7 @@ class OTPService:
     hasher: Hasher
     settings: Settings
     notification_service: NotificationService
+    redis: Redis
 
     async def generate_otp(self, user_id: int) -> str:
         code = get_random_string(self.settings.auth.otp_length, symbols=False)
@@ -36,7 +40,21 @@ class OTPService:
 
         return code
 
-    async def send_otp(self, receipent: UserContactInfo, code: str) -> None:
+    async def send_otp(
+        self, receipent: UserContactInfo, code: str, otp_rate_limit_seconds: int = 60
+    ) -> None:
+        key = f"otp:rate-limit:{receipent.username}"
+        allowed = await self.redis.set(
+            key,
+            "1",
+            nx=True,
+            ex=otp_rate_limit_seconds,
+        )
+
+        if not allowed:
+            raise OTPRateLimitError(
+                retry_after=str(otp_rate_limit_seconds),
+            )
         otp_notification = OTPNotification(
             users=[receipent],
             context={

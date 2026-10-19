@@ -15,8 +15,6 @@ class OTPNotification(NotificationType):
     def channel_options_tuple(self) -> tuple[ChannelOptions, ...]:
         settings = get_settings()
         # TODO: email template renderer
-        return (
-            EmailChannelOptions(
-                from_email=settings.email.from_email, body="Your otp code is {code}"
-            ),
-        )
+        template = "Your otp code is {code}"
+        body = template.format(**self.context)
+        return (EmailChannelOptions(from_email=settings.email.from_email, body=body),)

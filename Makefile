@@ -116,6 +116,9 @@ docker-migrate:
 docker-test:
 	docker compose run --rm test
 
+docker-redis:
+	docker compose up -d redis
+
 docker-migration:
 ifndef msg
 	$(error msg is required. Example: make docker-migration msg="create users")

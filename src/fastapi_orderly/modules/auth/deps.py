@@ -28,4 +28,8 @@ def get_user_service(
     hasher: Annotated[Hasher, Depends(get_hasher)],
     otp_service: Annotated[OTPService, Depends(get_otp_service)],
 ) -> UserService:
-    return UserService(user_repository=user_repository, hasher=hasher, otp_service=otp_service)
+    return UserService(
+        user_repository=user_repository,
+        hasher=hasher,
+        otp_service=otp_service,
+    )

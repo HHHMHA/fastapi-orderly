@@ -8,6 +8,7 @@ from fastapi_orderly.core.config import get_settings
 from fastapi_orderly.core.db.registry import UserAccount
 from fastapi_orderly.modules.auth.dtos import UserContactInfo
 from fastapi_orderly.modules.notifications.services import NotificationService
+from fastapi_orderly.modules.otp.errors import OTPRateLimitError
 from fastapi_orderly.modules.otp.models import OneTimePassword
 from fastapi_orderly.modules.otp.services import OTPService
 
@@ -125,3 +126,72 @@ class TestOTPService:
         assert otp.code_hash is not None
 
         assert len(otp.code_hash) == get_settings().auth.otp_length
+
+    @pytest.mark.asyncio
+    async def test_send_otp_rate_limited(
+        self,
+        otp_service: OTPService,
+    ) -> None:
+        recipient = UserContactInfo(
+            email="recipient@example.com",
+            username="test",
+        )
+
+        await otp_service.send_otp(receipent=recipient, code="123456")
+
+        with pytest.raises(OTPRateLimitError):
+            await otp_service.send_otp(receipent=recipient, code="654321")
+
+    @pytest.mark.asyncio
+    async def test_send_otp_after_rate_limit_expires(
+        self,
+        otp_service: OTPService,
+        notification_service: NotificationService,
+    ) -> None:
+        recipient = UserContactInfo(
+            email="recipient@example.com",
+            username="test",
+        )
+
+        dispatch = AsyncMock(wraps=notification_service.dispatch)
+        otp_service.notification_service.dispatch = dispatch
+
+        key = f"otp:rate-limit:{recipient.username}"
+
+        await otp_service.send_otp(receipent=recipient, code="123456")
+
+        with pytest.raises(OTPRateLimitError):
+            await otp_service.send_otp(receipent=recipient, code="654321")
+
+        # Simulate the rate-limit TTL expiring without waiting 60 seconds.
+        await otp_service.redis.delete(key)
+
+        await otp_service.send_otp(receipent=recipient, code="654321")
+
+        assert dispatch.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_send_otp_sets_rate_limit_ttl(
+        self,
+        otp_service: OTPService,
+    ) -> None:
+        recipient = UserContactInfo(
+            email="recipient@example.com",
+            username="test",
+        )
+
+        redis_set = AsyncMock(return_value=True)
+        otp_service.redis.set = redis_set
+
+        await otp_service.send_otp(
+            receipent=recipient,
+            code="123456",
+            otp_rate_limit_seconds=60,
+        )
+
+        redis_set.assert_awaited_once_with(
+            f"otp:rate-limit:{recipient.username}",
+            "1",
+            nx=True,
+            ex=60,
+        )
