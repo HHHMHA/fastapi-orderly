@@ -195,3 +195,78 @@ class TestOTPService:
             nx=True,
             ex=60,
         )
+
+    @pytest.mark.asyncio
+    async def test_check_otp_valid_code(
+        self,
+        otp_service: OTPService,
+        user: UserAccount,
+    ) -> None:
+        code = await otp_service.generate_otp(user.id)
+
+        result = await otp_service.check_otp(
+            user_id=user.id,
+            code=code,
+        )
+
+        assert result is True
+
+        otp = await otp_service.otp_repository.first(
+            OneTimePassword.user_id == user.id,
+        )
+
+        assert otp is None
+
+    @pytest.mark.asyncio
+    async def test_check_otp_invalid_code(
+        self,
+        otp_service: OTPService,
+        user: UserAccount,
+    ) -> None:
+        await otp_service.generate_otp(user.id)
+
+        result = await otp_service.check_otp(
+            user_id=user.id,
+            code="000000",
+        )
+
+        assert result is False
+
+        otp = await otp_service.otp_repository.first(
+            OneTimePassword.user_id == user.id,
+        )
+
+        assert otp is not None
+        assert otp.user_id == user.id
+
+    @pytest.mark.asyncio
+    async def test_check_otp_unknown_user(
+        self,
+        otp_service: OTPService,
+    ) -> None:
+        result = await otp_service.check_otp(
+            user_id=999999999,
+            code="123456",
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_check_otp_cannot_be_reused(
+        self,
+        otp_service: OTPService,
+        user: UserAccount,
+    ) -> None:
+        code = await otp_service.generate_otp(user.id)
+
+        first_result = await otp_service.check_otp(
+            user_id=user.id,
+            code=code,
+        )
+        second_result = await otp_service.check_otp(
+            user_id=user.id,
+            code=code,
+        )
+
+        assert first_result is True
+        assert second_result is False

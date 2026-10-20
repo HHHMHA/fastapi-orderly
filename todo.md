@@ -1,9 +1,8 @@
 services register, auth, issue, refresh, revoke and tests:
-resend otp rate limit
 
 check otp -> update user to is_active=True, is_verified=True (rate limit)
 
-login request -> issue token
+login request -> issue token (suspisous logint attempts, rate limit, captcha, trusted)
 refresh token request -> issue new token (and rotate refresh token)
 get current active user -> require_permission (refresh token not accepted)
 revoke token

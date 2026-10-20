@@ -66,3 +66,13 @@ class OTPService:
     async def generate_and_send(self, user_id: int, receipent: UserContactInfo) -> None:
         code = await self.generate_otp(user_id)
         await self.send_otp(receipent=receipent, code=code)
+
+    async def check_otp(self, user_id: int, code: str) -> bool:
+        code_hash = self.hasher.hash(code)
+        user_otp = await self.otp_repository.first(
+            OneTimePassword.user_id == user_id, OneTimePassword.code_hash == code_hash
+        )
+        if not user_otp:
+            return False
+        await self.otp_repository.delete(user_otp)
+        return True

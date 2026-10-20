@@ -3,6 +3,7 @@ from httpx import AsyncClient
 from redis.asyncio import Redis
 
 from fastapi_orderly.core.db.registry import UserAccount
+from fastapi_orderly.modules.auth.services import UserService
 
 
 class TestOTPResendEndPoint:
@@ -64,3 +65,122 @@ class TestOTPResendEndPoint:
 
         third_response = await client.post("/v1/auth/otp/resend", json=payload)
         assert third_response.status_code == 201
+
+
+class TestOTPCheckEndpoint:
+    @pytest.mark.asyncio
+    async def test_check_otp_success(
+        self,
+        client: AsyncClient,
+        user: UserAccount,
+        user_service: UserService,
+    ) -> None:
+        code = await user_service.otp_service.generate_otp(user.id)
+
+        payload = {
+            "email": user.email,
+            "code": code,
+        }
+
+        assert user.is_email_verified is False
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json=payload,
+        )
+
+        assert response.status_code == 200
+        assert user.is_email_verified is True
+
+    @pytest.mark.asyncio
+    async def test_check_otp_invalid_code(
+        self,
+        client: AsyncClient,
+        user: UserAccount,
+        user_service: UserService,
+    ) -> None:
+        await user_service.otp_service.generate_otp(user.id)
+
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json={
+                "email": user.email,
+                "code": "000000",
+            },
+        )
+
+        assert response.status_code == 400
+        assert user.is_email_verified is False
+
+    @pytest.mark.asyncio
+    async def test_check_otp_nonexistent_user(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json={
+                "email": "nonexistent@example.com",
+                "code": "123456",
+            },
+        )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_check_otp_already_verified_user(
+        self,
+        client: AsyncClient,
+        user: UserAccount,
+    ) -> None:
+        user.is_email_verified = True
+
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json={
+                "email": user.email,
+                "code": "123456",
+            },
+        )
+
+        assert response.status_code == 200
+        user.is_email_verified = True
+
+    @pytest.mark.asyncio
+    async def test_check_otp_invalid_email(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json={
+                "email": "not-an-email",
+                "code": "123456",
+            },
+        )
+
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_check_otp_missing_code(
+        self,
+        client: AsyncClient,
+        user: UserAccount,
+    ) -> None:
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json={"email": user.email},
+        )
+
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_check_otp_missing_email(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.post(
+            "/v1/auth/otp/check",
+            json={"code": "123456"},
+        )
+
+        assert response.status_code == 422

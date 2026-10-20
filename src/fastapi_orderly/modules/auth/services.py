@@ -10,6 +10,7 @@ from fastapi_orderly.modules.auth.repositories import (
     # UserPermissionsRepository,
     UserRepository,
 )
+from fastapi_orderly.modules.otp.errors import OTPCodeInvalidError
 from fastapi_orderly.modules.otp.services import OTPService
 
 # class AuthenticationService:
@@ -71,3 +72,27 @@ class UserService:
             )
             return None  #  keep emails private with silent fails but maybe we should log the case
         await self.otp_service.generate_and_send(user.id, UserContactInfo.model_validate(user))
+
+    async def verify_user_email(self, email: str, code: str) -> bool:
+        user = await self.user_repository.get_by_email(email)
+        if not user:
+            logger.info(
+                "OTP email check for no user",
+                extra={"reason": "account_not_found"},
+            )
+            return False
+
+        if user.is_email_verified:
+            logger.info(
+                "OTP email check for already active user",
+                extra={"reason": "account_not_found"},
+            )
+            return False
+
+        otp_check = await self.otp_service.check_otp(user.id, code)
+        if not otp_check:
+            raise OTPCodeInvalidError()
+
+        user.is_email_verified = True
+        await self.user_repository.session.commit()
+        return True
