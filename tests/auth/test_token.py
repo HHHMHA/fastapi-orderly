@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 from fastapi_orderly.core.config import get_settings
 from fastapi_orderly.modules.auth.deps import get_tokenizer
-from fastapi_orderly.modules.auth.token import TokenClaims
+from fastapi_orderly.modules.auth.token import TokenClaims, TokenType
 
 
 class TestTokenizer:
@@ -19,7 +19,7 @@ class TestTokenizer:
             jti="550e8400-e29b-41d4-a716-446655440000",
             iss="my-auth-service",
             aud="my-api",
-            typ="access",
+            typ=TokenType.ACCESS,
         )
 
         token = self.tokenizer.encode(claims)
@@ -40,7 +40,7 @@ class TestTokenizer:
             jti="550e8400-e29b-41d4-a716-446655440000",
             iss="my-auth-service",
             aud="my-api",
-            typ="access",
+            typ=TokenType.ACCESS,
         )
         payload = claims.model_dump(mode="json")
 
@@ -60,7 +60,7 @@ class TestTokenizer:
             jti="550e8400-e29b-41d4-a716-446655440000",
             iss="my-auth-service",
             aud="my-api",
-            typ="access",
+            typ=TokenType.ACCESS,
         )
         payload = claims.model_dump(mode="json")
 

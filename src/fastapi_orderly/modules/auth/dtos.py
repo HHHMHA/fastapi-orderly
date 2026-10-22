@@ -25,3 +25,8 @@ class UserDetailsResponse(BaseModel):
     username: str
     email: EmailStr
     is_email_verified: bool
+
+
+class LoginTokenResponse(BaseModel):
+    access: str
+    refresh: str

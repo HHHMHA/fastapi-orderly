@@ -17,9 +17,16 @@ from fastapi_orderly.core.db.registry import UserAccount
 from fastapi_orderly.core.db.session import Database, get_session
 from fastapi_orderly.core.redis_con import get_redis, setup_redis
 from fastapi_orderly.main import create_app
-from fastapi_orderly.modules.auth.deps import get_user_repository, get_user_service
+from fastapi_orderly.modules.auth.deps import (
+    get_authentication_service,
+    get_refresh_token_repository,
+    get_tokenizer,
+    get_user_repository,
+    get_user_service,
+)
 from fastapi_orderly.modules.auth.hasher import get_hasher
-from fastapi_orderly.modules.auth.services import UserService
+from fastapi_orderly.modules.auth.services import AuthenticationService, UserService
+from fastapi_orderly.modules.auth.token import AuthTokenizer
 from fastapi_orderly.modules.notifications.channels.options import ChannelOptions, ChannelType
 from fastapi_orderly.modules.notifications.notification_type import NotificationType
 from fastapi_orderly.modules.notifications.services import NotificationService
@@ -133,6 +140,20 @@ async def user(no_app_db_session: AsyncSession) -> UserAccount:
     return user
 
 
+@pytest_asyncio.fixture
+async def active_user(no_app_db_session: AsyncSession) -> UserAccount:
+    user = UserAccount(
+        username="test",
+        email="test@example.com",
+        password="test",
+        is_active=True,
+        is_email_verified=True,
+    )
+    no_app_db_session.add(user)
+    await no_app_db_session.flush()
+    return user
+
+
 class FakeNotificationChannel:
     def __init__(self) -> None:
         self.calls: list[tuple[NotificationType, ChannelOptions]] = []
@@ -217,3 +238,21 @@ async def client(
             yield client
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def tokenizer() -> AuthTokenizer:
+    return get_tokenizer(settings=get_settings())
+
+
+@pytest.fixture
+def authentication_service(
+    no_app_db_session: AsyncSession,
+    tokenizer: AuthTokenizer,
+) -> AuthenticationService:
+    return get_authentication_service(
+        user_repository=get_user_repository(session=no_app_db_session),
+        refresh_token_repository=get_refresh_token_repository(session=no_app_db_session),
+        hasher=FakeHasher(),
+        tokenizer=tokenizer,
+    )

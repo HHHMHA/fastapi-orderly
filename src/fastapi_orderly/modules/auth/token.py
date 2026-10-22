@@ -1,7 +1,8 @@
 import json
 from abc import abstractmethod
 from datetime import datetime
-from typing import Literal, Protocol, override
+from enum import StrEnum
+from typing import ClassVar, Literal, Protocol, override
 
 import pyseto
 from pydantic import BaseModel, ConfigDict
@@ -10,8 +11,15 @@ from pyseto import Key, KeyInterface
 from fastapi_orderly.core.config import Settings
 
 
+class TokenType(StrEnum):
+    ACCESS = "access"
+    REFRESH = "refresh"
+
+
 class TokenClaims(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    ACCESS: ClassVar[Literal["access"]] = "access"
+    REFRESH: ClassVar[Literal["refresh"]] = "refresh"
 
     sub: str
     exp: datetime
@@ -19,7 +27,7 @@ class TokenClaims(BaseModel):
     jti: str
     iss: str | None = None
     aud: str | None = None
-    typ: Literal["access", "refresh"]
+    typ: Literal[TokenType.ACCESS, TokenType.REFRESH]
 
 
 class AuthTokenizer(Protocol):

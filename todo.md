@@ -1,7 +1,5 @@
 services register, auth, issue, refresh, revoke and tests:
 
-check otp -> update user to is_active=True, is_verified=True (rate limit)
-
 login request -> issue token (suspisous logint attempts, rate limit, captcha, trusted)
 refresh token request -> issue new token (and rotate refresh token)
 get current active user -> require_permission (refresh token not accepted)
@@ -21,3 +19,4 @@ exceptions
 Rotation with reuse detection. This is the part worth building carefully. Each refresh token carries a family_id. On refresh: verify, mark the presented token used, issue a new one in the same family. If a token marked used is presented again, that means two parties hold it — one of them stole it — so revoke the entire family and force re-authentication. Without this, a stolen refresh token grants indefinite access; with it, the theft becomes self-detecting the moment either party uses it.
 
 translations
+what to do with non verified accounts after a while

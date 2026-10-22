@@ -1,13 +1,24 @@
-from unittest.mock import AsyncMock, patch
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_orderly.core.db.registry import UserAccount
-from fastapi_orderly.modules.auth.dtos import RegisterUserRequest, UserContactInfo
-from fastapi_orderly.modules.auth.errors import UserAlreadyRegisteredError
-from fastapi_orderly.modules.auth.services import UserService
+from fastapi_orderly.modules.auth.deps import (
+    get_authentication_service,
+    get_refresh_token_repository,
+    get_user_repository,
+)
+from fastapi_orderly.modules.auth.dtos import (
+    RegisterUserRequest,
+    UserContactInfo,
+)
+from fastapi_orderly.modules.auth.errors import UserAlreadyRegisteredError, WrongCredentialsError
+from fastapi_orderly.modules.auth.hasher import get_hasher
+from fastapi_orderly.modules.auth.services import AuthenticationService, UserService
+from fastapi_orderly.modules.auth.token import AuthTokenizer, TokenType
 from fastapi_orderly.modules.otp.errors import OTPCodeInvalidError
 from tests.utils import FakeHasher
 
@@ -296,3 +307,187 @@ class TestUserService:
 
         assert user.is_email_verified is False
         mock_commit.assert_not_awaited()
+
+
+class TestAuthenticationService:
+    @pytest.mark.asyncio
+    async def test_token_login_success(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        result = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        assert result.access is not None
+        assert result.refresh is not None
+
+        access_claims = tokenizer.decode(result.access)
+        refresh_claims = tokenizer.decode(result.refresh)
+
+        assert access_claims.sub == str(active_user.id)
+        assert access_claims.iss == "orderly:login"
+        assert access_claims.aud == "orderly"
+        assert access_claims.typ == TokenType.ACCESS
+        assert access_claims.jti
+        assert access_claims.iat is not None
+        assert access_claims.exp is not None
+
+        assert refresh_claims.sub == str(active_user.id)
+        assert refresh_claims.iss == "orderly:login"
+        assert refresh_claims.aud == "orderly:login"
+        assert refresh_claims.typ == TokenType.REFRESH
+        assert refresh_claims.jti
+        assert refresh_claims.iat is not None
+        assert refresh_claims.exp is not None
+
+        assert access_claims.jti != refresh_claims.jti
+
+        assert access_claims.exp - access_claims.iat == timedelta(minutes=15)
+        assert refresh_claims.exp - refresh_claims.iat == timedelta(hours=48)
+
+        saved_token = await authentication_service.refresh_token_repository.get_by_hash(
+            authentication_service.hasher.hash_token(result.refresh).encode("utf-8")
+        )
+
+        assert saved_token is not None
+        assert saved_token.user_id == active_user.id
+
+    @pytest.mark.asyncio
+    async def test_token_login_user_does_not_exist(
+        self,
+        authentication_service: AuthenticationService,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        with (
+            pytest.raises(WrongCredentialsError),
+            patch.object(
+                authentication_service.hasher, "verify", new_callable=MagicMock
+            ) as mock_verify,
+        ):
+            result = await authentication_service.token_login(
+                email="missing@example.com",
+                password="some-password",
+            )
+            assert result is None
+
+        mock_verify.assert_called_once_with(
+            "some-password",
+            authentication_service.hasher.dummy_hash,
+        )
+        assert await authentication_service.refresh_token_repository.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_token_login_wrong_password(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        with (
+            pytest.raises(WrongCredentialsError),
+        ):
+            result = await authentication_service.token_login(
+                email=active_user.email,
+                password="some-password",
+            )
+            assert result is None
+
+        assert await authentication_service.refresh_token_repository.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_token_login_inactive_user(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        with (
+            pytest.raises(WrongCredentialsError),
+        ):
+            active_user.is_email_verified = False
+            result = await authentication_service.token_login(
+                email=active_user.email,
+                password=active_user.password,
+            )
+            assert result is None
+
+        active_user.is_email_verified = True
+        active_user.is_active = False
+        with (
+            pytest.raises(WrongCredentialsError),
+        ):
+            result = await authentication_service.token_login(
+                email=active_user.email,
+                password=active_user.password,
+            )
+            assert result is None
+
+        assert await authentication_service.refresh_token_repository.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_token_login_success_integration(
+        self,
+        no_app_db_session: AsyncSession,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        hasher = get_hasher()
+
+        user = UserAccount(
+            email="test@example.com",
+            username="test",
+            password=hasher.hash("password"),
+            is_email_verified=True,
+            is_active=True,
+        )
+        no_app_db_session.add(user)
+        await no_app_db_session.flush()
+        authentication_service = get_authentication_service(
+            user_repository=get_user_repository(session=no_app_db_session),
+            refresh_token_repository=get_refresh_token_repository(session=no_app_db_session),
+            hasher=hasher,
+            tokenizer=tokenizer,
+        )
+
+        result = await authentication_service.token_login(
+            email=user.email,
+            password="password",
+        )
+
+        assert user.password != "password"
+        assert result.access is not None
+        assert result.refresh is not None
+
+        access_claims = tokenizer.decode(result.access)
+        refresh_claims = tokenizer.decode(result.refresh)
+
+        assert access_claims.sub == str(user.id)
+        assert access_claims.iss == "orderly:login"
+        assert access_claims.aud == "orderly"
+        assert access_claims.typ == TokenType.ACCESS
+        assert access_claims.jti
+        assert access_claims.iat is not None
+        assert access_claims.exp is not None
+
+        assert refresh_claims.sub == str(user.id)
+        assert refresh_claims.iss == "orderly:login"
+        assert refresh_claims.aud == "orderly:login"
+        assert refresh_claims.typ == TokenType.REFRESH
+        assert refresh_claims.jti
+        assert refresh_claims.iat is not None
+        assert refresh_claims.exp is not None
+
+        assert access_claims.jti != refresh_claims.jti
+
+        assert access_claims.exp - access_claims.iat == timedelta(minutes=15)
+        assert refresh_claims.exp - refresh_claims.iat == timedelta(hours=48)
+
+        saved_token = await authentication_service.refresh_token_repository.get_by_hash(
+            authentication_service.hasher.hash_token(result.refresh).encode("utf-8")
+        )
+
+        assert saved_token is not None
+        assert saved_token.user_id == user.id
