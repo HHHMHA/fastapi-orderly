@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_orderly.modules.auth.models import (
@@ -359,6 +361,7 @@ class TestRefreshTokenRepository:
         token = RefreshToken(
             user_id=user.id,
             token_hash=token_hash,
+            family_id=uuid.uuid4(),
         )
         await repo.save(token)
         await no_app_db_session.commit()
@@ -380,6 +383,7 @@ class TestRefreshTokenRepository:
         token = RefreshToken(
             user_id=user.id,
             token_hash=token_hash,
+            family_id=uuid.uuid4(),
         )
         await repo.save(token)
         await no_app_db_session.commit()
@@ -399,6 +403,7 @@ class TestRefreshTokenRepository:
         token = RefreshToken(
             user_id=user.id,
             token_hash=token_hash,
+            family_id=uuid.uuid4(),
         )
         await repo.save(token)
         await no_app_db_session.commit()
@@ -429,9 +434,21 @@ class TestRefreshTokenRepository:
         await no_app_db_session.flush()
 
         tokens = [
-            RefreshToken(user_id=users[0].id, token_hash=b"token-1"),
-            RefreshToken(user_id=users[0].id, token_hash=b"token-2"),
-            RefreshToken(user_id=users[1].id, token_hash=b"token-3"),
+            RefreshToken(
+                user_id=users[0].id,
+                token_hash=b"token-1",
+                family_id=uuid.uuid4(),
+            ),
+            RefreshToken(
+                user_id=users[0].id,
+                token_hash=b"token-2",
+                family_id=uuid.uuid4(),
+            ),
+            RefreshToken(
+                user_id=users[1].id,
+                token_hash=b"token-3",
+                family_id=uuid.uuid4(),
+            ),
         ]
 
         for token in tokens:
@@ -460,12 +477,21 @@ class TestRefreshTokenRepository:
             users.append(user)
         await no_app_db_session.flush()
         user_tokens = [
-            RefreshToken(user_id=users[0].id, token_hash=b"token-1"),
-            RefreshToken(user_id=users[0].id, token_hash=b"token-2"),
+            RefreshToken(
+                user_id=users[0].id,
+                token_hash=b"token-1",
+                family_id=uuid.uuid4(),
+            ),
+            RefreshToken(
+                user_id=users[0].id,
+                token_hash=b"token-2",
+                family_id=uuid.uuid4(),
+            ),
         ]
         other_token = RefreshToken(
             user_id=users[1].id,
             token_hash=b"token-3",
+            family_id=uuid.uuid4(),
         )
 
         for token in [*user_tokens, other_token]:
@@ -487,3 +513,144 @@ class TestRefreshTokenRepository:
         repo = RefreshTokenRepository(no_app_db_session)
 
         assert await repo.delete_user_tokens(999999) == 0
+
+    async def test_get_by_hash_for_update(
+        self,
+        no_app_db_session: AsyncSession,
+        user: UserAccount,
+    ) -> None:
+        repo = RefreshTokenRepository(no_app_db_session)
+        token_hash = b"token-hash"
+
+        token = RefreshToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            family_id=uuid.uuid4(),
+        )
+        await repo.save(token)
+        await no_app_db_session.commit()
+
+        result = await repo.get_by_hash_for_update(token_hash)
+
+        assert result == token
+        assert result is not None
+        assert result.token_hash == token_hash
+
+        assert await repo.get_by_hash_for_update(b"missing") is None
+
+    async def test_mark_used(
+        self,
+        no_app_db_session: AsyncSession,
+        user: UserAccount,
+    ) -> None:
+        repo = RefreshTokenRepository(no_app_db_session)
+
+        token = RefreshToken(
+            user_id=user.id,
+            token_hash=b"token-hash",
+            family_id=uuid.uuid4(),
+        )
+        await repo.save(token)
+        await no_app_db_session.commit()
+
+        assert token.is_used is False
+
+        await repo.mark_used(token)
+        await no_app_db_session.commit()
+
+        # Reload to verify the persisted database state.
+        await no_app_db_session.refresh(token)
+
+        assert token.is_used is True
+
+    async def test_mark_used_does_not_affect_other_tokens(
+        self,
+        no_app_db_session: AsyncSession,
+        user: UserAccount,
+    ) -> None:
+        repo = RefreshTokenRepository(no_app_db_session)
+
+        token = RefreshToken(
+            user_id=user.id,
+            token_hash=b"token-1",
+            family_id=uuid.uuid4(),
+        )
+        other_token = RefreshToken(
+            user_id=user.id,
+            token_hash=b"token-2",
+            family_id=uuid.uuid4(),
+        )
+
+        await repo.save(token)
+        await repo.save(other_token)
+        await no_app_db_session.commit()
+
+        await repo.mark_used(token)
+        await no_app_db_session.commit()
+
+        await no_app_db_session.refresh(token)
+        await no_app_db_session.refresh(other_token)
+
+        assert token.is_used is True
+        assert other_token.is_used is False
+
+    async def test_delete_family(
+        self,
+        no_app_db_session: AsyncSession,
+        user: UserAccount,
+    ) -> None:
+        repo = RefreshTokenRepository(no_app_db_session)
+
+        family_id = uuid.uuid4()
+        other_family_id = uuid.uuid4()
+
+        family_tokens = [
+            RefreshToken(
+                user_id=user.id,
+                token_hash=b"token-1",
+                family_id=family_id,
+            ),
+            RefreshToken(
+                user_id=user.id,
+                token_hash=b"token-2",
+                family_id=family_id,
+                is_used=True,
+            ),
+        ]
+        other_token = RefreshToken(
+            user_id=user.id,
+            token_hash=b"token-3",
+            family_id=other_family_id,
+        )
+
+        for token in [*family_tokens, other_token]:
+            await repo.save(token)
+
+        await no_app_db_session.commit()
+
+        await repo.delete_family(family_id)
+        await no_app_db_session.commit()
+
+        assert await repo.get_by_hash(b"token-1") is None
+        assert await repo.get_by_hash(b"token-2") is None
+        assert await repo.get_by_hash(b"token-3") == other_token
+
+    async def test_delete_family_when_missing(
+        self,
+        no_app_db_session: AsyncSession,
+        user: UserAccount,
+    ) -> None:
+        repo = RefreshTokenRepository(no_app_db_session)
+
+        token = RefreshToken(
+            user_id=user.id,
+            token_hash=b"token-1",
+            family_id=uuid.uuid4(),
+        )
+        await repo.save(token)
+        await no_app_db_session.commit()
+
+        await repo.delete_family(uuid.uuid4())
+        await no_app_db_session.commit()
+
+        assert await repo.get_by_hash(b"token-1") == token

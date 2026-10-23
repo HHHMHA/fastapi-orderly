@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -10,7 +11,11 @@ from fastapi_orderly.modules.auth.dtos import (
     RegisterUserRequest,
     UserContactInfo,
 )
-from fastapi_orderly.modules.auth.errors import UserAlreadyRegisteredError, WrongCredentialsError
+from fastapi_orderly.modules.auth.errors import (
+    InvalidRefreshTokenError,
+    UserAlreadyRegisteredError,
+    WrongCredentialsError,
+)
 from fastapi_orderly.modules.auth.hasher import Hasher
 from fastapi_orderly.modules.auth.repositories import (
     # RefreshTokenRepository,
@@ -32,6 +37,51 @@ class AuthenticationService:
     _ACCESS_TOKEN_EXPIRY: ClassVar[timedelta] = timedelta(minutes=15)
     _REFRESH_TOKEN_EXPIRY: ClassVar[timedelta] = timedelta(hours=48)
 
+    def _create_access_token(
+        self,
+        user_id: int,
+    ) -> str:
+        now = datetime.now(UTC)
+        return self.tokenizer.encode(
+            TokenClaims(
+                sub=str(user_id),
+                exp=now + self._ACCESS_TOKEN_EXPIRY,
+                iat=now,
+                jti=secrets.token_urlsafe(16),
+                iss="orderly:login",
+                aud="orderly",
+                typ=TokenType.ACCESS,
+            )
+        ).decode("ascii")
+
+    def _create_refresh_token(
+        self,
+        user_id: int,
+        family_id: uuid.UUID,
+    ) -> tuple[str, RefreshToken]:
+        now = datetime.now(UTC)
+        raw_token = self.tokenizer.encode(
+            TokenClaims(
+                sub=str(user_id),
+                exp=now + self._REFRESH_TOKEN_EXPIRY,
+                iat=now,
+                jti=secrets.token_urlsafe(32),
+                iss="orderly:login",
+                aud="orderly:login",
+                typ=TokenType.REFRESH,
+                family_id=family_id,
+            )
+        ).decode("ascii")
+
+        token_record = RefreshToken(
+            user_id=user_id,
+            token_hash=self.hasher.hash_token(raw_token).encode("utf-8"),
+            family_id=family_id,
+            is_used=False,
+        )
+
+        return raw_token, token_record
+
     # TODO: maybe later we support several login modes for apis
     async def token_login(self, email: str, password: str) -> LoginTokenResponse:
         # TODO: security including attempts, suspisous, trusted, captcha
@@ -48,40 +98,95 @@ class AuthenticationService:
         if not user.is_active or not user.is_email_verified:
             raise WrongCredentialsError()
 
-        now = datetime.now(UTC)
-        access_jti = secrets.token_urlsafe(16)
-        refresh_jti = secrets.token_urlsafe(32)
-        access_token: str = self.tokenizer.encode(
-            TokenClaims(
-                sub=str(user.id),
-                exp=now + self._ACCESS_TOKEN_EXPIRY,
-                iat=now,
-                jti=access_jti,
-                iss="orderly:login",
-                aud="orderly",
-                typ=TokenType.ACCESS,
-            )
-        ).decode("ascii")
+        family_id = uuid.uuid4()
 
-        refresh_token: str = self.tokenizer.encode(
-            TokenClaims(
-                sub=str(user.id),
-                exp=now + self._REFRESH_TOKEN_EXPIRY,
-                iat=now,
-                jti=refresh_jti,
-                iss="orderly:login",
-                aud="orderly:login",
-                typ=TokenType.REFRESH,
-            )
-        ).decode("ascii")
-
-        refresh_token_model = RefreshToken(
-            user_id=user.id, token_hash=self.hasher.hash_token(refresh_token).encode("utf-8")
+        access_token = self._create_access_token(user.id)
+        refresh_token, refresh_token_model = self._create_refresh_token(
+            user.id,
+            family_id,
         )
+
         await self.refresh_token_repository.save(refresh_token_model)
         await self.refresh_token_repository.session.commit()
 
         return LoginTokenResponse(access=access_token, refresh=refresh_token)
+
+    async def refresh_token(self, raw_token: str) -> LoginTokenResponse:
+        try:
+            claims = self.tokenizer.decode(raw_token)
+        except Exception as exc:
+            raise InvalidRefreshTokenError() from exc
+
+        now = datetime.now(UTC)
+
+        # Validate all refresh-token claims before using them.
+        if claims.typ != TokenType.REFRESH:
+            raise InvalidRefreshTokenError()
+
+        if claims.iss != "orderly:login":
+            raise InvalidRefreshTokenError()
+
+        if claims.aud != "orderly:login":
+            raise InvalidRefreshTokenError()
+
+        if claims.exp <= now:
+            raise InvalidRefreshTokenError()
+
+        if claims.iat > now:
+            raise InvalidRefreshTokenError()
+
+        if claims.family_id is None:
+            raise InvalidRefreshTokenError()
+
+        if not claims.sub.isdecimal():
+            raise InvalidRefreshTokenError()
+
+        user_id = int(claims.sub)
+
+        token_hash = self.hasher.hash_token(raw_token).encode("utf-8")
+
+        # This lookup should lock the row for the duration of the transaction.
+        record = await self.refresh_token_repository.get_by_hash_for_update(token_hash)
+
+        if record is None:
+            raise InvalidRefreshTokenError()
+
+        # The signed claims must match the stored record.
+        if record.user_id != user_id:
+            raise InvalidRefreshTokenError()
+
+        if record.family_id != claims.family_id:
+            raise InvalidRefreshTokenError()
+
+        if record.is_used:
+            await self.refresh_token_repository.delete_family(claims.family_id)
+            await self.refresh_token_repository.session.commit()
+            raise InvalidRefreshTokenError()
+
+        # Ensure the account is still allowed to authenticate.
+        user = await self.user_repository.get(user_id)
+
+        if user is None or not user.is_active or not user.is_email_verified:
+            raise InvalidRefreshTokenError()
+
+        # Consume the old token and create its replacement in the same
+        # transaction. The repository must enforce single-use atomically.
+        await self.refresh_token_repository.mark_used(record)
+
+        access_token = self._create_access_token(user_id)
+
+        new_refresh_token, new_record = self._create_refresh_token(
+            user_id=user_id,
+            family_id=claims.family_id,
+        )
+
+        await self.refresh_token_repository.save(new_record)
+        await self.refresh_token_repository.session.commit()
+
+        return LoginTokenResponse(
+            access=access_token,
+            refresh=new_refresh_token,
+        )
 
 
 # class AuthorizationService:

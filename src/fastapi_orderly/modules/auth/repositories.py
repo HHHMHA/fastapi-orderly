@@ -1,3 +1,7 @@
+from uuid import UUID
+
+from sqlalchemy import delete
+
 from fastapi_orderly.modules.auth.models import RefreshToken, UserAccount, UserPermissions
 from fastapi_orderly.shared.mixins.reposotories import (
     ActivatorRepositoryMixin,
@@ -166,3 +170,19 @@ class RefreshTokenRepository(RepositoryBase[RefreshToken]):
         return await self.delete_where(
             self.Model.user_id == user_id,
         )
+
+    async def get_by_hash_for_update(
+        self,
+        token_hash: bytes,
+    ) -> RefreshToken | None:
+        stmt = self.get_base_query(RefreshToken.token_hash == token_hash).with_for_update()
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def mark_used(self, token: RefreshToken) -> None:
+        token.is_used = True
+        await self.session.flush()
+
+    async def delete_family(self, family_id: UUID) -> None:
+        stmt = delete(RefreshToken).where(RefreshToken.family_id == family_id)
+        await self.session.execute(stmt)

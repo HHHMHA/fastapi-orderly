@@ -1,6 +1,7 @@
+import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import Boolean, ForeignKey, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import LargeBinary
 
@@ -20,8 +21,21 @@ class RefreshToken(ModelsMixin, Base):
 
     token_hash: Mapped[bytes] = mapped_column(
         LargeBinary(32),
+        nullable=False,
         unique=True,
+    )
+
+    family_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        nullable=False,
         index=True,
+    )
+
+    is_used: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
     )
 
     user: Mapped["UserAccount"] = relationship(

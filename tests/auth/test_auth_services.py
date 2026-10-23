@@ -1,3 +1,4 @@
+import uuid
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -5,7 +6,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fastapi_orderly.core.db.registry import UserAccount
+from fastapi_orderly.core.db.registry import RefreshToken, UserAccount
 from fastapi_orderly.modules.auth.deps import (
     get_authentication_service,
     get_refresh_token_repository,
@@ -15,7 +16,11 @@ from fastapi_orderly.modules.auth.dtos import (
     RegisterUserRequest,
     UserContactInfo,
 )
-from fastapi_orderly.modules.auth.errors import UserAlreadyRegisteredError, WrongCredentialsError
+from fastapi_orderly.modules.auth.errors import (
+    InvalidRefreshTokenError,
+    UserAlreadyRegisteredError,
+    WrongCredentialsError,
+)
 from fastapi_orderly.modules.auth.hasher import get_hasher
 from fastapi_orderly.modules.auth.services import AuthenticationService, UserService
 from fastapi_orderly.modules.auth.token import AuthTokenizer, TokenType
@@ -491,3 +496,302 @@ class TestAuthenticationService:
 
         assert saved_token is not None
         assert saved_token.user_id == user.id
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_success(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        old_claims = tokenizer.decode(login.refresh)
+        old_hash = authentication_service.hasher.hash_token(login.refresh).encode("utf-8")
+
+        old_record = await authentication_service.refresh_token_repository.get_by_hash(old_hash)
+        assert old_record is not None
+        assert old_record.is_used is False
+
+        result = await authentication_service.refresh_token(login.refresh)
+
+        assert result.access
+        assert result.refresh
+        assert result.refresh != login.refresh
+
+        access_claims = tokenizer.decode(result.access)
+        refresh_claims = tokenizer.decode(result.refresh)
+
+        assert access_claims.sub == str(active_user.id)
+        assert access_claims.iss == "orderly:login"
+        assert access_claims.aud == "orderly"
+        assert access_claims.typ == TokenType.ACCESS
+
+        assert refresh_claims.sub == str(active_user.id)
+        assert refresh_claims.iss == "orderly:login"
+        assert refresh_claims.aud == "orderly:login"
+        assert refresh_claims.typ == TokenType.REFRESH
+        assert refresh_claims.family_id == old_claims.family_id
+
+        assert access_claims.jti != refresh_claims.jti
+        assert refresh_claims.jti != old_claims.jti
+
+        # The old token is consumed.
+        await authentication_service.refresh_token_repository.session.refresh(old_record)
+        assert old_record.is_used is True
+
+        # The replacement is persisted and unused.
+        new_hash = authentication_service.hasher.hash_token(result.refresh).encode("utf-8")
+        new_record = await authentication_service.refresh_token_repository.get_by_hash(new_hash)
+
+        assert new_record is not None
+        assert new_record.user_id == active_user.id
+        assert new_record.family_id == old_claims.family_id
+        assert new_record.is_used is False
+
+        assert access_claims.exp - access_claims.iat == timedelta(minutes=15)
+        assert refresh_claims.exp - refresh_claims.iat == timedelta(hours=48)
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_reuse_deletes_entire_family(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        first_claims = tokenizer.decode(login.refresh)
+
+        # First rotation: R1 -> R2.
+        rotated = await authentication_service.refresh_token(login.refresh)
+
+        second_hash = authentication_service.hasher.hash_token(rotated.refresh).encode("utf-8")
+
+        second_record = await authentication_service.refresh_token_repository.get_by_hash(
+            second_hash
+        )
+        assert second_record is not None
+        assert second_record.family_id == first_claims.family_id
+
+        # Replay R1. It must revoke R2 and every other token in this family.
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(login.refresh)
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(second_hash)
+        ) is None
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(login.refresh).encode("utf-8")
+            )
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_reuse_does_not_delete_other_families(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+    ) -> None:
+        first_login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        second_login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        # Rotate the first family.
+        rotated_first = await authentication_service.refresh_token(first_login.refresh)
+
+        second_family_hash = authentication_service.hasher.hash_token(second_login.refresh).encode(
+            "utf-8"
+        )
+
+        second_family_record = await authentication_service.refresh_token_repository.get_by_hash(
+            second_family_hash
+        )
+        assert second_family_record is not None
+
+        # Reusing the first family's consumed token revokes only that family.
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(first_login.refresh)
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(rotated_first.refresh).encode("utf-8")
+            )
+        ) is None
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(second_family_hash)
+        ) is not None
+
+        # The unrelated family's refresh token remains usable.
+        second_rotated = await authentication_service.refresh_token(second_login.refresh)
+        assert second_rotated.access
+        assert second_rotated.refresh
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_invalid_token(
+        self,
+        authentication_service: AuthenticationService,
+    ) -> None:
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token("not-a-valid-token")
+
+        assert await authentication_service.refresh_token_repository.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_access_token_is_rejected(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(login.access)
+
+        # Rejecting an access token must not consume or delete the refresh token.
+        refresh_hash = authentication_service.hasher.hash_token(login.refresh).encode("utf-8")
+        record = await authentication_service.refresh_token_repository.get_by_hash(refresh_hash)
+
+        assert record is not None
+        assert record.is_used is False
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_inactive_user_is_rejected(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        active_user.is_active = False
+        await authentication_service.refresh_token_repository.session.commit()
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(login.refresh)
+
+        # The token must not be rotated for an inactive user.
+        assert await authentication_service.refresh_token_repository.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_invalid_claims_and_records(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+        from uuid import uuid4
+
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        valid_claims = tokenizer.decode(login.refresh)
+
+        # Each modified token must fail validation.
+        invalid_claims = [
+            valid_claims.model_copy(update={"typ": TokenType.ACCESS}),
+            valid_claims.model_copy(update={"iss": "wrong-issuer"}),
+            valid_claims.model_copy(update={"aud": "wrong-audience"}),
+            valid_claims.model_copy(update={"exp": datetime.now(UTC) - timedelta(minutes=1)}),
+            valid_claims.model_copy(update={"iat": datetime.now(UTC) + timedelta(minutes=1)}),
+            valid_claims.model_copy(update={"family_id": None}),
+            valid_claims.model_copy(update={"sub": "not-an-integer"}),
+        ]
+
+        for claims in invalid_claims:
+            # Bypass PASETO signing so the service receives a correctly signed
+            # token containing the modified claims.
+            token = authentication_service.tokenizer.encode(claims).decode("ascii")
+
+            with pytest.raises(InvalidRefreshTokenError):
+                await authentication_service.refresh_token(token)
+
+        # A validly signed token whose hash is not in the database.
+        unknown_token = authentication_service.tokenizer.encode(
+            valid_claims.model_copy(update={"jti": "unknown-jti"})
+        ).decode("ascii")
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(unknown_token)
+
+        # Token subject doesn't match the user ID stored in the database.
+        mismatched_sub = valid_claims.model_copy(update={"sub": str(active_user.id + 1)})
+        mismatched_sub_token = authentication_service.tokenizer.encode(mismatched_sub).decode(
+            "ascii"
+        )
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(mismatched_sub_token)
+
+        # Token family doesn't match the database record.
+        mismatched_family = valid_claims.model_copy(update={"family_id": uuid4()})
+        mismatched_family_token = authentication_service.tokenizer.encode(mismatched_family).decode(
+            "ascii"
+        )
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(mismatched_family_token)
+
+        # Inactive / unverified users cannot refresh.
+        active_user.is_active = False
+        await authentication_service.refresh_token_repository.session.commit()
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(login.refresh)
+
+        active_user.is_active = True
+        active_user.is_email_verified = False
+        await authentication_service.refresh_token_repository.session.commit()
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(login.refresh)
+
+        # Cover record.user_id != user_id
+        claims = tokenizer.decode(login.refresh).model_copy(update={"sub": str(active_user.id + 1)})
+        token = tokenizer.encode(claims).decode("ascii")
+
+        record = RefreshToken(
+            user_id=active_user.id,
+            token_hash=authentication_service.hasher.hash_token(token).encode("utf-8"),
+            family_id=claims.family_id,
+        )
+        await authentication_service.refresh_token_repository.save(record)
+        await authentication_service.refresh_token_repository.session.commit()
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(token)
+
+        # Cover record.family_id != claims.family_id
+        claims = tokenizer.decode(login.refresh).model_copy(update={"family_id": uuid.uuid4()})
+        token = tokenizer.encode(claims).decode("ascii")
+
+        record = RefreshToken(
+            user_id=active_user.id,
+            token_hash=authentication_service.hasher.hash_token(token).encode("utf-8"),
+            family_id=uuid.uuid4(),  # Deliberately differs from the claim.
+        )
+        await authentication_service.refresh_token_repository.save(record)
+        await authentication_service.refresh_token_repository.session.commit()
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.refresh_token(token)

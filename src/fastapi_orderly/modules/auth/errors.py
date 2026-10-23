@@ -31,3 +31,13 @@ class WrongCredentialsError(BaseAPIError):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Wrong credentials",
         )
+
+
+class InvalidRefreshTokenError(BaseAPIError):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Refresh Token",
+        )

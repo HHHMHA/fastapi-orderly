@@ -1,4 +1,5 @@
 import json
+import uuid
 from abc import abstractmethod
 from datetime import datetime
 from enum import StrEnum
@@ -28,6 +29,8 @@ class TokenClaims(BaseModel):
     iss: str | None = None
     aud: str | None = None
     typ: Literal[TokenType.ACCESS, TokenType.REFRESH]
+
+    family_id: uuid.UUID | None = None
 
 
 class AuthTokenizer(Protocol):
