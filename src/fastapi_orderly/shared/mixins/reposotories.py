@@ -1,7 +1,16 @@
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, TypeVar, cast
 
-from sqlalchemy import ColumnElement, CursorResult, UnaryExpression, delete, func, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    CursorResult,
+    UnaryExpression,
+    delete,
+    func,
+    insert,
+    or_,
+    select,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 from sqlalchemy.sql import Select
@@ -163,6 +172,19 @@ class RepositoryBase[T: Base]:
 
     async def save(self, entity: T) -> None:
         self.session.add(entity)
+        await self.session.flush()
+
+    async def bulk_insert(self, entities: Sequence[T]) -> None:
+        if not entities:
+            return
+
+        await self.session.execute(
+            insert(self.Model),
+            [
+                {key: value for key, value in vars(entity).items() if not key.startswith("_")}
+                for entity in entities
+            ],
+        )
         await self.session.flush()
 
     async def exists(

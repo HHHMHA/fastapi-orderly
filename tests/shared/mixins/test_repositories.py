@@ -677,3 +677,45 @@ class TestBaseRepository:
         result = await repo.run(repo.filter_is_disabled())
 
         assert not result
+
+    async def test_bulk_insert_empty(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        await repo.bulk_insert([])
+
+        assert await repo.count() == 0
+
+    async def test_bulk_insert(
+        self,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        repo = FakeUserRepository(no_app_db_session)
+
+        users = [
+            UserAccount(
+                username=f"user{i}",
+                password="test",
+                email=f"user{i}@example.com",
+            )
+            for i in range(3)
+        ]
+
+        await repo.bulk_insert(users)
+
+        result = await repo.all()
+
+        assert len(result) == 3
+        assert {user.username for user in result} == {
+            "user0",
+            "user1",
+            "user2",
+        }
+        assert {user.email for user in result} == {
+            "user0@example.com",
+            "user1@example.com",
+            "user2@example.com",
+        }
+        assert all(user.password == "test" for user in result)

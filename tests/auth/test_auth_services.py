@@ -1,13 +1,14 @@
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fastapi_orderly.core.db.registry import RefreshToken, UserAccount
+from fastapi_orderly.core.db.registry import RefreshToken, UserAccount, UserPermissions
 from fastapi_orderly.modules.auth.deps import (
+    AuthenticatedUserBase,
     get_authentication_service,
     get_refresh_token_repository,
     get_user_repository,
@@ -17,12 +18,19 @@ from fastapi_orderly.modules.auth.dtos import (
     UserContactInfo,
 )
 from fastapi_orderly.modules.auth.errors import (
+    AccountLockedError,
     InvalidRefreshTokenError,
+    InvalidTokenError,
     UserAlreadyRegisteredError,
+    UserPermissionError,
     WrongCredentialsError,
 )
 from fastapi_orderly.modules.auth.hasher import get_hasher
-from fastapi_orderly.modules.auth.services import AuthenticationService, UserService
+from fastapi_orderly.modules.auth.services import (
+    AuthenticationService,
+    AuthorizationService,
+    UserService,
+)
 from fastapi_orderly.modules.auth.token import AuthTokenizer, TokenType
 from fastapi_orderly.modules.otp.errors import OTPCodeInvalidError
 from tests.utils import FakeHasher
@@ -795,3 +803,385 @@ class TestAuthenticationService:
 
         with pytest.raises(InvalidRefreshTokenError):
             await authentication_service.refresh_token(token)
+
+
+class TestGetTokenUser:
+    @pytest.mark.asyncio
+    async def test_success(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        result = await authentication_service.get_token_user(login.access)
+
+        assert result.id == active_user.id
+
+    @pytest.mark.asyncio
+    async def test_decode_failure(
+        self,
+        authentication_service: AuthenticationService,
+    ) -> None:
+        authentication_service.tokenizer.decode = MagicMock(side_effect=ValueError("Invalid token"))
+
+        with pytest.raises(InvalidTokenError):
+            await authentication_service.get_token_user("invalid")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "claim_update",
+        [
+            {"typ": TokenType.REFRESH},
+            {"iss": "wrong-issuer"},
+            {"aud": "wrong-audience"},
+            {"exp": datetime.now(UTC) - timedelta(minutes=1)},
+            {"iat": datetime.now(UTC) + timedelta(minutes=1)},
+            {"sub": "not-a-number"},
+            {
+                "exp": datetime.now(UTC) - timedelta(minutes=1),
+                "iat": datetime.now(UTC) - timedelta(minutes=2),
+            },
+            {"jti": ""},
+            {
+                "iat": datetime.now(UTC) + timedelta(minutes=2),
+                "exp": datetime.now(UTC) + timedelta(minutes=1),
+            },
+        ],
+        ids=[
+            "wrong-token-type",
+            "wrong-issuer",
+            "wrong-audience",
+            "expired-token",
+            "issued-in-future",
+            "invalid-subject",
+            "expiration-before-issued-time",
+            "empty-token-id",
+            "expiration-before-issued-time",
+        ],
+    )
+    async def test_invalid_claims(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+        claim_update: dict,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        claims = tokenizer.decode(login.access)
+
+        token = tokenizer.encode(claims.model_copy(update=claim_update)).decode("ascii")
+
+        with pytest.raises(InvalidTokenError):
+            await authentication_service.get_token_user(token)
+
+    @pytest.mark.asyncio
+    async def test_token_lifetime_exceeds_maximum(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        claims = tokenizer.decode(login.access)
+        token = tokenizer.encode(
+            claims.model_copy(
+                update={
+                    "iat": datetime.now(UTC) - timedelta(days=2),
+                    "exp": datetime.now(UTC) + timedelta(days=1),
+                }
+            )
+        ).decode("ascii")
+
+        with pytest.raises(InvalidTokenError):
+            await authentication_service.get_token_user(token)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("is_active", "is_email_verified"),
+        [
+            (False, True),
+            (True, False),
+            (False, False),
+        ],
+        ids=["inactive", "unverified-email", "inactive-and-unverified"],
+    )
+    async def test_locked_account(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        is_active: bool,
+        is_email_verified: bool,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        active_user.is_active = is_active
+        active_user.is_email_verified = is_email_verified
+
+        with pytest.raises(AccountLockedError):
+            await authentication_service.get_token_user(login.access)
+
+    @pytest.mark.asyncio
+    async def test_user_does_not_exist(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        claims = tokenizer.decode(login.access)
+
+        authentication_service.user_repository.get = AsyncMock(return_value=None)
+
+        with pytest.raises(AccountLockedError):
+            await authentication_service.get_token_user(login.access)
+
+        authentication_service.user_repository.get.assert_awaited_once_with(int(claims.sub))
+
+
+class TestAuthorizationService:
+    @pytest.mark.asyncio
+    async def test_has_any_permission_admin(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+    ) -> None:
+        active_user.is_admin = True
+
+        assert await authorization_service.has_any_permission(active_user, ("orders:read",))
+
+    @pytest.mark.asyncio
+    async def test_has_any_permission_matching_permission(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        active_user.is_admin = False
+
+        permissions = [
+            UserPermissions(perm_code="orders:read", user_id=active_user.id),
+            UserPermissions(perm_code="orders:write", user_id=active_user.id),
+        ]
+        no_app_db_session.add_all(permissions)
+        await no_app_db_session.flush()
+
+        await no_app_db_session.refresh(
+            active_user,
+            attribute_names=["permissions"],
+        )
+
+        assert await authorization_service.has_any_permission(
+            active_user, ("orders:read", "users:read")
+        )
+
+    @pytest.mark.asyncio
+    async def test_has_any_permission_no_matching_permission(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        active_user.is_admin = False
+
+        permission = UserPermissions(perm_code="orders:read", user_id=active_user.id)
+        no_app_db_session.add(permission)
+        await no_app_db_session.flush()
+
+        assert not await authorization_service.has_any_permission(
+            active_user, ("users:read", "users:write")
+        )
+
+    @pytest.mark.asyncio
+    async def test_has_any_permission_empty_requested_permissions(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+    ) -> None:
+        active_user.is_admin = False
+
+        assert not await authorization_service.has_any_permission(active_user, ())
+
+    @pytest.mark.asyncio
+    async def test_has_any_permission_user_has_no_permissions(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+    ) -> None:
+        active_user.is_admin = False
+
+        assert not await authorization_service.has_any_permission(active_user, ("orders:read",))
+
+    @pytest.mark.asyncio
+    async def test_has_permission_admin(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+    ) -> None:
+        active_user.is_admin = True
+
+        assert await authorization_service.has_permission(active_user, "orders:read")
+
+    @pytest.mark.asyncio
+    async def test_has_permission_matching_permission(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        active_user.is_admin = False
+
+        permissions = [
+            UserPermissions(perm_code="orders:read", user_id=active_user.id),
+            UserPermissions(perm_code="orders:write", user_id=active_user.id),
+        ]
+        no_app_db_session.add_all(permissions)
+        await no_app_db_session.flush()
+
+        active_user.permissions.extend(permissions)
+        await no_app_db_session.flush()
+
+        assert await authorization_service.has_permission(active_user, "orders:write")
+
+    @pytest.mark.asyncio
+    async def test_has_permission_no_matching_permission(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+        no_app_db_session: AsyncSession,
+    ) -> None:
+        active_user.is_admin = False
+
+        permission = UserPermissions(perm_code="orders:read", user_id=active_user.id)
+        no_app_db_session.add(permission)
+        await no_app_db_session.flush()
+
+        active_user.permissions.append(permission)
+        await no_app_db_session.flush()
+
+        assert not await authorization_service.has_permission(active_user, "users:read")
+
+    @pytest.mark.asyncio
+    async def test_has_permission_empty_permissions(
+        self,
+        authorization_service: AuthorizationService,
+        active_user: UserAccount,
+    ) -> None:
+        active_user.is_admin = False
+
+        assert not await authorization_service.has_permission(active_user, "orders:read")
+
+
+class TestAuthenticatedUserBase:
+    @pytest.mark.asyncio
+    async def test_authenticated_user_without_permissions(
+        self,
+        active_user: UserAccount,
+        authentication_service: AuthenticationService,
+        authorization_service: AuthorizationService,
+    ) -> None:
+        authenticated_user = AuthenticatedUserBase()
+
+        authentication_service.get_token_user = AsyncMock(return_value=active_user)
+
+        user = await authenticated_user(
+            token="valid-token",
+            authentication_service=authentication_service,
+            authorization_service=authorization_service,
+        )
+
+        assert user == active_user
+        authentication_service.get_token_user.assert_awaited_once_with("valid-token")
+
+    @pytest.mark.asyncio
+    async def test_authenticated_user_with_matching_permission(
+        self,
+        active_user: UserAccount,
+        authentication_service: AuthenticationService,
+        authorization_service: AuthorizationService,
+    ) -> None:
+        authenticated_user = AuthenticatedUserBase(
+            allowed_permissions=("orders:read", "orders:write")
+        )
+
+        authentication_service.get_token_user = AsyncMock(return_value=active_user)
+        authorization_service.has_any_permission = AsyncMock(return_value=True)
+
+        user = await authenticated_user(
+            token="valid-token",
+            authentication_service=authentication_service,
+            authorization_service=authorization_service,
+        )
+
+        assert user == active_user
+        authentication_service.get_token_user.assert_awaited_once_with("valid-token")
+        authorization_service.has_any_permission.assert_awaited_once_with(
+            active_user,
+            ("orders:read", "orders:write"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_authenticated_user_without_matching_permission(
+        self,
+        active_user: UserAccount,
+        authentication_service: AuthenticationService,
+        authorization_service: AuthorizationService,
+    ) -> None:
+        authenticated_user = AuthenticatedUserBase(
+            allowed_permissions=("users:read", "users:write")
+        )
+
+        authentication_service.get_token_user = AsyncMock(return_value=active_user)
+        authorization_service.has_any_permission = AsyncMock(return_value=False)
+
+        with pytest.raises(UserPermissionError):
+            await authenticated_user(
+                token="valid-token",
+                authentication_service=authentication_service,
+                authorization_service=authorization_service,
+            )
+
+        authentication_service.get_token_user.assert_awaited_once_with("valid-token")
+        authorization_service.has_any_permission.assert_awaited_once_with(
+            active_user,
+            ("users:read", "users:write"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_authenticated_user_with_single_permission(
+        self,
+        active_user: UserAccount,
+        authentication_service: AuthenticationService,
+        authorization_service: AuthorizationService,
+    ) -> None:
+        authenticated_user = AuthenticatedUserBase(allowed_permissions=("orders:read",))
+
+        authentication_service.get_token_user = AsyncMock(return_value=active_user)
+        authorization_service.has_any_permission = AsyncMock(return_value=True)
+
+        user = await authenticated_user(
+            token="valid-token",
+            authentication_service=authentication_service,
+            authorization_service=authorization_service,
+        )
+
+        assert user == active_user
+        authorization_service.has_any_permission.assert_awaited_once_with(
+            active_user,
+            ("orders:read",),
+        )

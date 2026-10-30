@@ -41,3 +41,33 @@ class InvalidRefreshTokenError(BaseAPIError):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Refresh Token",
         )
+
+
+class InvalidTokenError(BaseAPIError):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Token",
+        )
+
+
+class AccountLockedError(BaseAPIError):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account Locked",
+        )
+
+
+class UserPermissionError(BaseAPIError):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No permission",
+        )

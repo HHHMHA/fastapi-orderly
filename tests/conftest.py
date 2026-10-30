@@ -19,13 +19,19 @@ from fastapi_orderly.core.redis_con import get_redis, setup_redis
 from fastapi_orderly.main import create_app
 from fastapi_orderly.modules.auth.deps import (
     get_authentication_service,
+    get_authorization_service,
+    get_permission_repository,
     get_refresh_token_repository,
     get_tokenizer,
     get_user_repository,
     get_user_service,
 )
 from fastapi_orderly.modules.auth.hasher import get_hasher
-from fastapi_orderly.modules.auth.services import AuthenticationService, UserService
+from fastapi_orderly.modules.auth.services import (
+    AuthenticationService,
+    AuthorizationService,
+    UserService,
+)
 from fastapi_orderly.modules.auth.token import AuthTokenizer
 from fastapi_orderly.modules.notifications.channels.options import ChannelOptions, ChannelType
 from fastapi_orderly.modules.notifications.notification_type import NotificationType
@@ -151,6 +157,10 @@ async def active_user(no_app_db_session: AsyncSession) -> UserAccount:
     )
     no_app_db_session.add(user)
     await no_app_db_session.flush()
+    await no_app_db_session.refresh(
+        user,
+        attribute_names=["permissions"],
+    )
     return user
 
 
@@ -255,4 +265,14 @@ def authentication_service(
         refresh_token_repository=get_refresh_token_repository(session=no_app_db_session),
         hasher=FakeHasher(),
         tokenizer=tokenizer,
+    )
+
+
+@pytest.fixture
+def authorization_service(
+    no_app_db_session: AsyncSession,
+) -> AuthorizationService:
+    return get_authorization_service(
+        user_repository=get_user_repository(session=no_app_db_session),
+        permission_repository=get_permission_repository(session=no_app_db_session),
     )

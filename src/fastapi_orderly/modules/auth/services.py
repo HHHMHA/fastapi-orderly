@@ -12,15 +12,16 @@ from fastapi_orderly.modules.auth.dtos import (
     UserContactInfo,
 )
 from fastapi_orderly.modules.auth.errors import (
+    AccountLockedError,
     InvalidRefreshTokenError,
+    InvalidTokenError,
     UserAlreadyRegisteredError,
     WrongCredentialsError,
 )
 from fastapi_orderly.modules.auth.hasher import Hasher
 from fastapi_orderly.modules.auth.repositories import (
-    # RefreshTokenRepository,
-    # UserPermissionsRepository,
     RefreshTokenRepository,
+    UserPermissionsRepository,
     UserRepository,
 )
 from fastapi_orderly.modules.auth.token import AuthTokenizer, TokenClaims, TokenType
@@ -188,15 +189,80 @@ class AuthenticationService:
             refresh=new_refresh_token,
         )
 
+    async def get_token_user(self, token: str) -> UserAccount:
+        now = datetime.now(UTC)
 
-# class AuthorizationService:
-#     def __init__(
-#         self,
-#         user_repository: UserRepository,
-#         permission_repository: UserPermissionsRepository,
-#     ) -> None:
-#         self.user_repository = user_repository
-#         self.permission_repository: UserPermissionsRepository
+        try:
+            claims = self.tokenizer.decode(token)
+        except Exception as exc:
+            raise InvalidTokenError() from exc
+
+        # Validate token type and required claims.
+        if claims.typ != TokenType.ACCESS:
+            raise InvalidTokenError()
+
+        if claims.iss != "orderly:login":
+            raise InvalidTokenError()
+
+        if claims.aud != "orderly":
+            raise InvalidTokenError()
+
+        if claims.exp <= now:
+            raise InvalidTokenError()
+
+        if claims.iat > now:
+            raise InvalidTokenError()
+
+        # Reject malformed subjects.
+        if not claims.sub.isdecimal():
+            raise InvalidTokenError()
+
+        if claims.exp - claims.iat > self._ACCESS_TOKEN_EXPIRY:
+            raise InvalidTokenError()
+
+        if not claims.jti:
+            raise InvalidTokenError()
+
+        user_id = int(claims.sub)
+
+        # Load the account and enforce current account status.
+        user = await self.user_repository.get(user_id)
+
+        if user is None or not user.is_active or not user.is_email_verified:
+            raise AccountLockedError()
+
+        return user
+
+
+class AuthorizationService:
+    def __init__(
+        self,
+        user_repository: UserRepository,
+        permission_repository: UserPermissionsRepository,
+    ) -> None:
+        self.user_repository = user_repository
+        self.permission_repository: UserPermissionsRepository
+
+    async def has_any_permission(
+        self,
+        user: UserAccount,
+        permissions: tuple[str, ...],
+    ) -> bool:
+        if user.is_admin:
+            return True
+
+        user_permissions = {permission.perm_code for permission in user.permissions}
+        return not user_permissions.isdisjoint(permissions)
+
+    async def has_permission(
+        self,
+        user: UserAccount,
+        perm_code: str,
+    ) -> bool:
+        if user.is_admin:
+            return True
+
+        return any(permission.perm_code == perm_code for permission in user.permissions)
 
 
 @dataclass
