@@ -250,6 +250,34 @@ async def client(
         app.dependency_overrides.clear()
 
 
+@pytest_asyncio.fixture
+async def authenticated_client(
+    no_app_db_session: AsyncSession,
+    redis_client: Redis,
+    authentication_service: AuthenticationService,
+    active_user: UserAccount,
+) -> AsyncGenerator[httpx.AsyncClient]:
+    app = create_app()
+    app.dependency_overrides[get_hasher] = lambda: FakeHasher()
+    app.dependency_overrides[get_redis] = lambda: redis_client
+
+    async def override_get_session() -> AsyncGenerator[AsyncSession]:
+        yield no_app_db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            token_data = await authentication_service.token_login(active_user.email, "test")
+            client.headers["Authorization"] = f"Bearer {token_data.access}"
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+
+
 @pytest.fixture
 def tokenizer() -> AuthTokenizer:
     return get_tokenizer(settings=get_settings())

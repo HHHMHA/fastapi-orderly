@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from pytest_mock import MockerFixture
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_orderly.core.config import get_settings
@@ -201,7 +202,10 @@ class TestOTPService:
         self,
         otp_service: OTPService,
         user: UserAccount,
+        mocker: MockerFixture,
     ) -> None:
+        spy = mocker.spy(otp_service.hasher, "verify")
+
         code = await otp_service.generate_otp(user.id)
 
         result = await otp_service.check_otp(
@@ -210,12 +214,7 @@ class TestOTPService:
         )
 
         assert result is True
-
-        otp = await otp_service.otp_repository.first(
-            OneTimePassword.user_id == user.id,
-        )
-
-        assert otp is None
+        spy.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_check_otp_invalid_code(

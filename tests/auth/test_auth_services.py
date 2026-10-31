@@ -6,11 +6,13 @@ import pytest
 from pydantic import SecretStr, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi_orderly.core.config import get_settings
 from fastapi_orderly.core.db.registry import RefreshToken, UserAccount, UserPermissions
 from fastapi_orderly.modules.auth.deps import (
     AuthenticatedUserBase,
     get_authentication_service,
     get_refresh_token_repository,
+    get_tokenizer,
     get_user_repository,
 )
 from fastapi_orderly.modules.auth.dtos import (
@@ -31,7 +33,7 @@ from fastapi_orderly.modules.auth.services import (
     AuthorizationService,
     UserService,
 )
-from fastapi_orderly.modules.auth.token import AuthTokenizer, TokenType
+from fastapi_orderly.modules.auth.token import AuthTokenizer, TokenClaims, TokenType
 from fastapi_orderly.modules.otp.errors import OTPCodeInvalidError
 from tests.utils import FakeHasher
 
@@ -803,6 +805,207 @@ class TestAuthenticationService:
 
         with pytest.raises(InvalidRefreshTokenError):
             await authentication_service.refresh_token(token)
+
+
+class TestLogoutUser:
+    @pytest.mark.asyncio
+    async def test_logout_success(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        tokenizer.decode(login.refresh)
+
+        await authentication_service.logout(login.refresh)
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(login.refresh).encode("utf-8")
+            )
+        ) is None
+
+        assert (await authentication_service.refresh_token_repository.count()) == 0
+
+    @pytest.mark.asyncio
+    async def test_logout_invalid_token(
+        self,
+        authentication_service: AuthenticationService,
+    ) -> None:
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.logout("not-a-valid-token")
+
+        assert await authentication_service.refresh_token_repository.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_logout_missing_family_id(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        claims = tokenizer.decode(login.refresh)
+        token = tokenizer.encode(claims.model_copy(update={"family_id": None})).decode("ascii")
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.logout(token)
+
+        assert await authentication_service.refresh_token_repository.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_logout_access_token_is_rejected(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+    ) -> None:
+        tokenizer = get_tokenizer(get_settings())
+
+        now = datetime.now(UTC)
+        claims = TokenClaims(
+            sub="1",
+            exp=now + timedelta(minutes=15),
+            iat=now,
+            jti="550e8400-e29b-41d4-a716-446655440000",
+            iss="my-auth-service",
+            aud="my-api",
+            typ=TokenType.ACCESS,
+            family_id=uuid.uuid4(),
+        )
+        token = tokenizer.encode(claims).decode("ascii")
+
+        with pytest.raises(InvalidRefreshTokenError):
+            await authentication_service.logout(token)
+
+    @pytest.mark.asyncio
+    async def test_logout_deletes_entire_family(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        first_login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        second_login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        first_claims = tokenizer.decode(first_login.refresh)
+        second_claims = tokenizer.decode(second_login.refresh)
+
+        assert first_claims.family_id != second_claims.family_id
+        assert await authentication_service.refresh_token_repository.count() == 2
+
+        await authentication_service.logout(first_login.refresh)
+
+        assert await authentication_service.refresh_token_repository.count() == 1
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(first_login.refresh).encode("utf-8")
+            )
+        ) is None
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(second_login.refresh).encode("utf-8")
+            )
+        ) is not None
+
+    @pytest.mark.asyncio
+    async def test_logout_all_success(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+    ) -> None:
+        first_login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        second_login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+
+        assert await authentication_service.refresh_token_repository.count() == 2
+
+        await authentication_service.logout_all(active_user.id)
+
+        assert await authentication_service.refresh_token_repository.count() == 0
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(first_login.refresh).encode("utf-8")
+            )
+        ) is None
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                authentication_service.hasher.hash_token(second_login.refresh).encode("utf-8")
+            )
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_logout_all_does_not_delete_other_users_tokens(
+        self,
+        authentication_service: AuthenticationService,
+        active_user: UserAccount,
+        no_app_db_session: AsyncSession,
+        tokenizer: AuthTokenizer,
+    ) -> None:
+        hasher = get_hasher()
+
+        other_user = UserAccount(
+            email="other@example.com",
+            username="other",
+            password=hasher.hash("password"),
+            is_email_verified=True,
+            is_active=True,
+        )
+        no_app_db_session.add(other_user)
+        await no_app_db_session.flush()
+
+        other_service = get_authentication_service(
+            user_repository=get_user_repository(session=no_app_db_session),
+            refresh_token_repository=get_refresh_token_repository(session=no_app_db_session),
+            hasher=hasher,
+            tokenizer=tokenizer,
+        )
+
+        login = await authentication_service.token_login(
+            email=active_user.email,
+            password=active_user.password,
+        )
+        other_login = await other_service.token_login(
+            email=other_user.email,
+            password="password",
+        )
+
+        await authentication_service.logout_all(active_user.id)
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                hasher.hash_token(login.refresh).encode("utf-8")
+            )
+        ) is None
+
+        assert (
+            await authentication_service.refresh_token_repository.get_by_hash(
+                hasher.hash_token(other_login.refresh).encode("utf-8")
+            )
+        ) is not None
 
 
 class TestGetTokenUser:

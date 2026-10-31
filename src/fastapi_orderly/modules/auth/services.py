@@ -233,6 +233,25 @@ class AuthenticationService:
 
         return user
 
+    async def logout(self, raw_token: str) -> None:
+        try:
+            claims = self.tokenizer.decode(raw_token)
+        except Exception as exc:
+            raise InvalidRefreshTokenError() from exc
+
+        if not claims.family_id:
+            raise InvalidRefreshTokenError()
+
+        if claims.typ != TokenType.REFRESH:
+            raise InvalidRefreshTokenError()
+
+        await self.refresh_token_repository.delete_family(claims.family_id)
+        await self.refresh_token_repository.session.commit()
+
+    async def logout_all(self, user_id: int) -> None:
+        await self.refresh_token_repository.delete_user_tokens(user_id)
+        await self.refresh_token_repository.session.commit()
+
 
 class AuthorizationService:
     def __init__(
